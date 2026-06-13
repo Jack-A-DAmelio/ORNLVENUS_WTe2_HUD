@@ -1,7 +1,8 @@
 import paneMakers.rolledImagePanes
+import paneMakers.temperaturePane
 from pathlib import Path
 import re
-
+import populateHDFSpreadSheet
 MASTER_IMAGE_SOURCE = Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/")
 ENERGY_FRAME_MIN = 560
 ENERGY_FRAME_MAX = 830
@@ -16,6 +17,18 @@ EXPECTED_IMAGE_DURATION = 5 #How long one frame was collected for, not the total
 MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest/")
 OB_PATH = Path(
 	"/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")
+
+def prepare_image_panes(tifs_to_attach_with_panes, destination, csv):
+
+    temperaturePane = True
+    averageGreyscalePane = True
+
+    tif_folder = Path(tifs_to_attach_with_panes[0]).parent
+    if temperaturePane:
+        paneMakers.temperaturePane.prepare_temperaturePane(tif_folder, csv, destination)
+
+
+ 
 
 def batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, ob_path = OB_PATH, roll_length= 5): #will perform a series of data processing steps, and then caclulate plots to make composite image
 
@@ -108,7 +121,13 @@ def batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, r
   #  )
     return 0
 def main():
-    batch_process_images_into_rolls(roll_length = 5)
+    tifsCreated = batch_process_images_into_rolls(roll_length = 5)
+    csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE)
+    print("Making Temp Panes")
+    prepare_image_panes(tifsCreated, MASTER_DESTINATION / "temperaturePanes/", csvPath)
+
+
+
     return 0
 
 	

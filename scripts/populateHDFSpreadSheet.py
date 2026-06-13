@@ -8,15 +8,10 @@ from pathlib import Path
 # ==========================================================
 # USER CONFIG
 # ==========================================================
+BASE_DIR = "/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
 
-BASE_DIR = "/SNS/users/lfigari/data/SNS/VENUS/IPTS-36967/nexus/"
 
-ROOT_DIR = Path(
-    "/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/"
-)
 
-script_dir = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_CSV = os.path.join(script_dir, "runSummary_MayALL.csv")
 
 # ==========================================================
 # HDF FILE PATH
@@ -125,13 +120,13 @@ def summarize_run(run_num, iso_thresh=0.2):
 # ==========================================================
 
 
-def get_run_numbers():
+def get_run_numbers(master_image_source):
 
     pattern = re.compile(r"Run_(\d+)")
 
     run_numbers = []
 
-    for outer in os.scandir(ROOT_DIR):
+    for outer in os.scandir(master_image_source):
 
         if not outer.is_dir():
             continue
@@ -150,7 +145,7 @@ def get_run_numbers():
                 run_number = int(match.group(1))
                 run_numbers.append(run_number)
 
-        print(f"{outer.name}: {run_number}")
+        #print(f"{outer.name}: {run_number}")
 
     run_numbers = sorted(set(run_numbers))
 
@@ -162,9 +157,9 @@ def get_run_numbers():
 # MAIN
 # ==========================================================
 
-def main():
+def update_HDF_sheet(output_CSV_path, master_image_source):
 
-    Run_nums = get_run_numbers()
+    Run_nums = get_run_numbers(master_image_source)
 
     header = [
         "Index",
@@ -180,7 +175,7 @@ def main():
         "EndT"
     ]
 
-    with open(OUTPUT_CSV, "w", newline="") as f:
+    with open(output_CSV_path, "w", newline="") as f:
 
         writer = csv.writer(f)
         writer.writerow(header)
@@ -191,16 +186,18 @@ def main():
                 row = summarize_run(run_num)
                 writer.writerow([idx] + row)
 
-                print(f"[{idx+1}/{len(Run_nums)}] Run {run_num}")
+                #print(f"[{idx+1}/{len(Run_nums)}] Run {run_num}")
 
             except Exception as e:
                 print(f"FAILED run {run_num}: {e}")
+                pass
 
-    print("\nWrote:", OUTPUT_CSV)
+    print("\nWrote:", output_CSV_path)
+    return output_CSV_path
 
 # ==========================================================
 # RUN
 # ==========================================================
 
-if __name__ == "__main__":
-    main()
+#if __name__ == "__main__":
+ #   main()
