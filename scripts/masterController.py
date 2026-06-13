@@ -1,5 +1,6 @@
 import paneMakers.rolledImagePanes
 import paneMakers.temperaturePane
+import paneMakers.averageGreyscalePane
 from pathlib import Path
 import re
 import populateHDFSpreadSheet
@@ -18,15 +19,20 @@ MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/J
 OB_PATH = Path(
 	"/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")
 
-def prepare_image_panes(tifs_to_attach_with_panes, destination, csv):
+def prepare_image_panes(tif_folder, destination, csv):
 
     temperaturePane = True
     averageGreyscalePane = True
 
-    tif_folder = Path(tifs_to_attach_with_panes[0]).parent
+    
+    temperaturePanels = []
     if temperaturePane:
-        paneMakers.temperaturePane.prepare_temperaturePane(tif_folder, csv, destination)
+        temperaturePanels = paneMakers.temperaturePane.prepare_temperaturePane(tif_folder, csv, destination / "temperaturePanes")
+    averageGreyscalePanes = []
+    if averageGreyscalePane:
+        averageGreyscalePanes = paneMakers.averageGreyscalePane.run_roi_pipeline(tif_folder, destination / "averageGrayScalePanes")
 
+    return [temperaturePanels, averageGrayScalePanes]
 
  
 
@@ -121,10 +127,11 @@ def batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, r
   #  )
     return 0
 def main():
-    tifsCreated = batch_process_images_into_rolls(roll_length = 5)
+    roll = 5
+    tifsCreated = batch_process_images_into_rolls(roll_length = roll)
     csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE)
     print("Making Temp Panes")
-    prepare_image_panes(tifsCreated, MASTER_DESTINATION / "temperaturePanes/", csvPath)
+    panes = prepare_image_panes(MASTER_DESTINATION / (str(roll) +"rolls"), MASTER_DESTINATION / (str(roll) +"rolls"), csvPath)
 
 
 

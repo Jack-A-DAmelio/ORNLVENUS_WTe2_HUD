@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -7,83 +6,9 @@ from pathlib import Path
 from PIL import Image
 from matplotlib.widgets import RectangleSelector
 
-# ==========================================================
-# PATHS
-# ==========================================================
-
-TIFF_FOLDER = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/Nucleation/halfPercent/Crystal Images_rolling/30_roll/postProcess_Run_23139_LF99D_Diss_05at_0_416C_0_000AngsMin_0/")
-CSV_FILE = "/SNS/VENUS/IPTS-36967/shared/Jack/runSummary_MayALL.csv"
-
-HUD_DIR = TIFF_FOLDER / "3Panel HUD"
-HUD_DIR.mkdir(exist_ok=True)
-
-ROI_FILE = HUD_DIR / "rois.npy"
-
-N = 10
 
 # ==========================================================
-# LOAD CSV
-# ==========================================================
-
-df = pd.read_csv(CSV_FILE)
-
-df["RunNum"] = (
-    df["RunNum"]
-    .astype(str)
-    .str.strip()
-    .str.replace(".0", "", regex=False)
-    .astype(int)
-)
-
-df = df.sort_values("RunNum").reset_index(drop=True)
-
-run_list = df["RunNum"].tolist()
-
-run_to_avgT = dict(zip(df["RunNum"], df["AvgT"]))
-run_to_start = dict(zip(df["RunNum"], df["StartTime"]))
-run_to_idx = {r: i for i, r in enumerate(run_list)}
-
-# ==========================================================
-# TIME CLEANER
-# ==========================================================
-
-def clean_time_column(time_list):
-
-    cleaned = []
-
-    for t in time_list:
-        if isinstance(t, (list, tuple, np.ndarray)):
-            t = t[0]
-        if isinstance(t, (bytes, bytearray)):
-            t = t.decode("utf-8")
-
-        t = str(t)
-        t = t.replace("[", "").replace("]", "")
-        t = t.replace("b'", "").replace("'", "")
-
-        cleaned.append(t)
-
-    return pd.to_datetime(cleaned)
-
-# ==========================================================
-# TIFF PARSER
-# ==========================================================
-
-def parse_run_range(filename):
-
-    name = filename.replace(".tif", "")
-    parts = name.split("_")
-
-    try:
-        start_run = int(parts[1])
-        end_run = int(parts[2])
-    except:
-        return []
-
-    return list(range(start_run, end_run + 1))
-
-# ==========================================================
-# DISPLAY NORMALIZATION (UNCHANGED)
+# DISPLAY NORMALIZATION
 # ==========================================================
 
 def to_display(img):
@@ -93,10 +18,15 @@ def to_display(img):
     lo = np.percentile(img, 1)
     hi = np.percentile(img, 99)
 
-    return np.clip((img - lo) / (hi - lo + 1e-8), 0, 1)
+    return np.clip(
+        (img - lo) / (hi - lo + 1e-8),
+        0,
+        1
+    )
+
 
 # ==========================================================
-# ROI SELECTION (UNCHANGED)
+# ROI SELECTION
 # ==========================================================
 
 def select_roi(image):
@@ -104,8 +34,15 @@ def select_roi(image):
     roi = {"box": None}
 
     fig, ax = plt.subplots(figsize=(8, 8))
-    ax.imshow(to_display(image), cmap="gray")
-    ax.set_title("Draw ROI Rectangle and Close Window")
+
+    ax.imshow(
+        to_display(image),
+        cmap="gray"
+    )
+
+    ax.set_title(
+        "Draw ROI Rectangle Then Close Window"
+    )
 
     def onselect(eclick, erelease):
 
@@ -116,7 +53,7 @@ def select_roi(image):
             int(min(x1, x2)),
             int(max(x1, x2)),
             int(min(y1, y2)),
-            int(max(y1, y2)),
+            int(max(y1, y2))
         )
 
         print("ROI:", roi["box"])
@@ -131,255 +68,395 @@ def select_roi(image):
 
     plt.show()
 
+    if roi["box"] is None:
+        raise ValueError("No ROI selected")
+
     return roi["box"]
 
-# ==========================================================
-# LOAD TIFFS
-# ==========================================================
-
-tiff_files = sorted(list(TIFF_FOLDER.glob("*.tif")))
 
 # ==========================================================
-# ROI LOAD
+# LOAD OR CREATE ROI
 # ==========================================================
 
-if ROI_FILE.exists():
-    print("Loading ROI")
-    x1, x2, y1, y2 = np.load(ROI_FILE)
-else:
-    img0 = np.array(Image.open(tiff_files[0]))
-    x1, x2, y1, y2 = select_roi(img0)
-    np.save(ROI_FILE, np.array([x1, x2, y1, y2]))
+def load_or_create_roi(
+    tiff_files,
+    roi_file
+):
+
+    roi_file = Path(roi_file)
+
+    if roi_file.exists():
+
+        print("Loading ROI:", roi_file)
+
+        return tuple(
+            np.load(roi_file)
+        )
+
+    first_img = np.array(
+        Image.open(tiff_files[0])
+    )
+
+    roi = select_roi(first_img)
+
+    np.save(
+        roi_file,
+        np.array(roi)
+    )
+
+    print("Saved ROI:", roi_file)
+
+    return roi
+
 
 # ==========================================================
 # ROI MEANS
 # ==========================================================
 
-roi_means = []
+def compute_roi_means(
+    tiff_files,
+    roi
+):
 
-for tif in tiff_files:
-    img = np.array(Image.open(tif))
-    roi = img[y1:y2, x1:x2]
-    roi_means.append(float(np.mean(roi)))
+    x1, x2, y1, y2 = roi
 
-roi_means = np.array(roi_means)
+    roi_means = []
 
-ROI_YMIN = roi_means.min()
-ROI_YMAX = roi_means.max()
+    for tif in tiff_files:
 
-# ==========================================================
-# GLOBAL RECORD STORE (SYNC SOURCE)
-# ==========================================================
+        img = np.array(
+            Image.open(tif)
+        )
 
-records = []
+        roi_pixels = img[
+            y1:y2,
+            x1:x2
+        ]
 
-# ==========================================================
-# TEMPERATURE CONTEXT (UNCHANGED LOGIC)
-# ==========================================================
+        roi_means.append(
+            float(
+                np.mean(roi_pixels)
+            )
+        )
 
-def get_temperature_context(run_range, N=5):
+    return np.array(roi_means)
 
-    window_T = []
-    window_time = []
-
-    for r in run_range:
-        if r in run_to_avgT and r in run_to_start:
-            window_T.append(run_to_avgT[r])
-            window_time.append(run_to_start[r])
-
-    if len(window_T) == 0:
-        return None
-
-    indices = [run_to_idx[r] for r in run_range if r in run_to_idx]
-
-    if len(indices) == 0:
-        return None
-
-    left = max(min(indices) - N, 0)
-    right = min(max(indices) + N, len(run_list) - 1)
-
-    context_T = []
-    context_time = []
-
-    for i in range(left, right + 1):
-        r = run_list[i]
-        if r in run_to_avgT and r in run_to_start:
-            context_T.append(run_to_avgT[r])
-            context_time.append(run_to_start[r])
-
-    return {
-        "window_time": window_time,
-        "window_T": window_T,
-        "context_time": context_time,
-        "context_T": context_T
-    }
 
 # ==========================================================
-# TEMPERATURE PANEL (RESTORED FULL VERSION)
+# ROI PANEL
 # ==========================================================
 
-def make_temperature_panel(data):
-
-    window_time = np.array(clean_time_column(data["window_time"]))
-    context_time = np.array(clean_time_column(data["context_time"]))
-
-    window_T = np.array(data["window_T"])
-    context_T = np.array(data["context_T"])
-
-    order = np.argsort(window_time)
-
-    window_time = window_time[order]
-    window_T = window_T[order]
-
-    fig, ax = plt.subplots(figsize=(5.12, 5.12), dpi=100)
-
-    ax.plot(context_time, context_T, color="gray", alpha=0.3)
-    ax.plot(window_time, window_T, color="orange", linewidth=2.5)
-
-    ax.axvspan(window_time.min(), window_time.max(), color="orange", alpha=0.15)
-
-    ax.set_xticks([])
-    ax.set_ylabel("T")
-
-    fig.canvas.draw()
-    panel = np.array(fig.canvas.buffer_rgba())[:, :, :3]
-    plt.close(fig)
-
-    return panel
-
-# ==========================================================
-# ROI PANEL (UNCHANGED STRUCTURE)
-# ==========================================================
-
-def make_roi_panel(idx):
+def make_roi_panel(
+    idx,
+    roi_means,
+    roi_ymin,
+    roi_ymax,
+    N=10
+):
 
     left = max(idx - N, 0)
     right = min(idx + N, len(roi_means) - 1)
 
-    x = np.arange(left, right + 1)
-    y = roi_means[left:right + 1]
+    x = np.arange(
+        left,
+        right + 1
+    )
 
-    fig, ax = plt.subplots(figsize=(5.12, 5.12), dpi=100)
+    y = roi_means[
+        left:right + 1
+    ]
 
-    ax.plot(x, y, color="gray", alpha=0.5)
-    ax.axvline(idx, color="orange", linewidth=6)
+    fig, ax = plt.subplots(
+        figsize=(5.12, 5.12),
+        dpi=100
+    )
 
-    ax.scatter(0.96, 0.92, s=150, c="black", transform=ax.transAxes)
-    ax.scatter(0.96, 0.08, s=150, facecolors="white",
-               edgecolors="black", transform=ax.transAxes)
+    ax.plot(
+        x,
+        y,
+        color="gray",
+        alpha=0.5
+    )
 
-    ax.set_ylim(ROI_YMAX, ROI_YMIN)
+    ax.axvline(
+        idx,
+        color="orange",
+        linewidth=6,
+        alpha=0.8
+    )
+
+    ax.scatter(
+        0.96,
+        0.92,
+        s=150,
+        c="black",
+        transform=ax.transAxes,
+        zorder=10
+    )
+
+    ax.scatter(
+        0.96,
+        0.08,
+        s=150,
+        facecolors="white",
+        edgecolors="black",
+        linewidths=1.5,
+        transform=ax.transAxes,
+        zorder=10
+    )
+
+    ax.text(
+        0.02,
+        0.95,
+        f"Mean ROI:\n{roi_means[idx]:.2f}",
+        transform=ax.transAxes,
+        bbox=dict(
+            facecolor="white",
+            alpha=0.7
+        ),
+        fontsize=10,
+        va="top"
+    )
+
+    # darker values at top
+    ax.set_ylim(
+        roi_ymax,
+        roi_ymin
+    )
+
     ax.set_xticks([])
 
+    ax.set_xlabel(
+        f"{2*N+1} images"
+    )
+
+    ax.set_ylabel(
+        "ROI Mean"
+    )
+
+    plt.tight_layout()
+
     fig.canvas.draw()
-    panel = np.array(fig.canvas.buffer_rgba())[:, :, :3]
+
+    panel = np.array(
+        fig.canvas.buffer_rgba()
+    )[:, :, :3]
+
     plt.close(fig)
 
     return panel
 
-# ==========================================================
-# IMAGE PANEL (UNCHANGED)
-# ==========================================================
-
-def make_image_panel(tif_path):
-
-    img = np.array(Image.open(tif_path))
-    disp = to_display(img)
-
-    rgb = (disp * 255).astype(np.uint8)
-    rgb = np.stack([rgb]*3, axis=-1)
-
-    return np.array(Image.fromarray(rgb).resize((512, 512)))
 
 # ==========================================================
-# GLUE
+# PREPARE ROI PANES
 # ==========================================================
 
-def make_three_panel(a, b, c):
-    return np.concatenate([a, b, c], axis=1)
+def prepare_roiPane(
+    tif_folder,
+    output_folder,
+    roi_file,
+    N=10
+):
 
-# ==========================================================
-# MAIN LOOP (SYNCED RECORDS ADDED ONLY)
-# ==========================================================
+    tif_folder = Path(
+        tif_folder
+    )
 
-def process_all():
+    output_folder = Path(
+        output_folder
+    )
 
-    global records
+    output_folder.mkdir(
+        parents=True,
+        exist_ok=True
+    )
 
-    for idx, tif in enumerate(tiff_files):
+    tiff_files = sorted(
+        tif_folder.glob("*.tif")
+    )
 
-        run_range = parse_run_range(tif.name)
-
-        if len(run_range) == 0:
-            continue
-
-        r = run_range[len(run_range)//2]
-
-        if r not in run_to_avgT or r not in run_to_start:
-            continue
-
-        temp_data = get_temperature_context(run_range, N=N)
-
-        if temp_data is None:
-            continue
-
-        print("Processing:", tif.name)
-
-        temp_panel = make_temperature_panel(temp_data)
-        roi_panel = make_roi_panel(idx)
-        image_panel = make_image_panel(tif)
-
-        combined = make_three_panel(temp_panel, roi_panel, image_panel)
-
-        Image.fromarray(combined.astype(np.uint8)).save(
-            HUD_DIR / f"{tif.stem}.png"
+    if len(tiff_files) == 0:
+        raise ValueError(
+            "No TIFF files found"
         )
 
-        # sync record (ONLY addition, no behavior change)
+    roi = load_or_create_roi(
+        tiff_files,
+        roi_file
+    )
+
+    roi_means = compute_roi_means(
+        tiff_files,
+        roi
+    )
+
+    roi_ymin = float(
+        roi_means.min()
+    )
+
+    roi_ymax = float(
+        roi_means.max()
+    )
+
+    pane_paths = []
+    records = []
+
+    for idx, tif in enumerate(
+        tiff_files
+    ):
+
+        print(
+            "Processing:",
+            tif.name
+        )
+
+        panel = make_roi_panel(
+            idx,
+            roi_means,
+            roi_ymin,
+            roi_ymax,
+            N=N
+        )
+
+        out_path = (
+            output_folder /
+            f"{tif.stem}.png"
+        )
+
+        Image.fromarray(
+            panel.astype(np.uint8)
+        ).save(out_path)
+
+        pane_paths.append(
+            out_path
+        )
+
         records.append({
+
             "index": idx,
+
             "filename": tif.name,
-            "run": r,
-            "time": run_to_start[r],
-            "temperature": run_to_avgT[r],
-            "roi_mean": float(roi_means[idx])
+
+            "roi_mean":
+                float(
+                    roi_means[idx]
+                )
+
         })
 
-    # summaries + csv
-    make_full_range_summaries_from_records(records, HUD_DIR)
-    make_csv(records, HUD_DIR)
+    return pane_paths, records
+
 
 # ==========================================================
-# SUMMARY + CSV
+# SUMMARY PLOT + CSV
 # ==========================================================
 
-def make_full_range_summaries_from_records(records, output_dir):
+def save_roi_summary(
+    records,
+    output_folder
+):
 
-    roi = np.array([r["roi_mean"] for r in records])
-    temp = np.array([r["temperature"] for r in records])
+    output_folder = Path(
+        output_folder
+    )
 
-    plt.figure()
-    plt.plot(roi, color="black")
+    output_folder.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    roi = np.array([
+        r["roi_mean"]
+        for r in records
+    ])
+
+    plt.figure(
+        figsize=(10, 4)
+    )
+
+    plt.plot(
+        roi,
+        color="black"
+    )
+
     plt.gca().invert_yaxis()
-    plt.savefig(output_dir / "ROI_Mean_FullRange.png", dpi=200)
+
+    plt.xlabel(
+        "Image Index"
+    )
+
+    plt.ylabel(
+        "Mean ROI"
+    )
+
+    plt.title(
+        "ROI Mean Over Full Dataset"
+    )
+
+    plt.tight_layout()
+
+    plt.savefig(
+        output_folder /
+        "ROI_Mean_FullRange.png",
+        dpi=200
+    )
+
     plt.close()
 
-    plt.figure()
-    plt.plot(temp, color="black")
-    plt.savefig(output_dir / "Temperature_FullRange.png", dpi=200)
-    plt.close()
-
-
-def make_csv(records, output_dir):
-
-    pd.DataFrame(records).to_csv(
-        output_dir / "TIFF_ROI_Temperature_Log.csv",
+    pd.DataFrame(
+        records
+    ).to_csv(
+        output_folder /
+        "TIFF_ROI_Log.csv",
         index=False
     )
 
+
 # ==========================================================
-# RUN
+# ENTRY POINT
+# ==========================================================
+
+def run_roi_pipeline(
+    tif_folder,
+    output_folder,
+    roi_file,
+    N=10
+):
+
+    pane_paths, records = prepare_roiPane(
+        tif_folder,
+        output_folder,
+        roi_file,
+        N=N
+    )
+
+    save_roi_summary(
+        records,
+        output_folder
+    )
+
+    return pane_paths
+
+
+# ==========================================================
+# EXAMPLE
 # ==========================================================
 
 if __name__ == "__main__":
-    process_all()
+
+    pane_paths, records = run_roi_pipeline(
+
+        tif_folder="/path/to/tiffs",
+
+        output_folder="/path/to/ROI_Panes",
+
+        roi_file="/path/to/ROI_Panes/roi.npy",
+
+        N=10
+    )
+
+    print(
+        "Created",
+        len(pane_paths),
+        "ROI panes"
+    )
