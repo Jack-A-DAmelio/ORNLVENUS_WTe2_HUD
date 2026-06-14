@@ -22,7 +22,7 @@ ENDING_RUN_NUMBER = 23535
 RUN_NUMBERS = list(range(STARTING_RUN_NUMBER, ENDING_RUN_NUMBER + 1))
 
 EXPECTED_IMAGE_DURATION = 5 #How long one frame was collected for, not the total length of the rolled frames
-ROLL_LENGTH_IN_MIN = [5] # how long the total roll is, should be a multiple of EXPECTED_IMAGE_DURATION
+ROLL_LENGTH_IN_MIN = [60] # how long the total roll is, should be a multiple of EXPECTED_IMAGE_DURATION
 
 MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest/") #Where are these files will go
 OB_PATH = Path(
