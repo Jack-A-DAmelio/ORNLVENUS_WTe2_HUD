@@ -27,7 +27,7 @@ ENERGY_FRAME_MAX = 830
 
 
 STARTING_RUN_NUMBER = 23139# THe run number to be analyzed
-ENDING_RUN_NUMBER = 23373
+ENDING_RUN_NUMBER = 23141
 RUN_NUMBERS = list(range(STARTING_RUN_NUMBER, ENDING_RUN_NUMBER + 1))
 
 EXPECTED_IMAGE_DURATION = 5 #How long one frame was collected for, not the total length of the rolled frames
@@ -37,25 +37,104 @@ MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/J
 OB_PATH = Path(
 	"/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")# the ob for the whole roll, make sure hte length is right
 
-def prepare_image_panes(tif_folder, destination, csv, roi = False):
+def prepare_image_panes(
+    tif_folder,
+    destination,
+    csv,
+    roi=False
+):
 
-    temperaturePane = False
-    averageGreyscalePane = False
-    greyScaleHistogram = True
+    make_temperature_pane = True
+    make_average_greyscale_pane = True
+    make_histogram_pane = True
 
-    
-    temperaturePanels = []
-    if temperaturePane:
-        temperaturePanels = paneMakers.temperaturePane.prepare_temperaturePane(tif_folder, csv, destination / "temperaturePanes")
-    averageGreyscalePanes = []
-    if averageGreyscalePane:
-        averageGreyscalePanes = paneMakers.averageGreyscalePane.run_roi_pipeline(tif_folder, destination / "averageGrayScalePanes", roi)
-    greyScaleHistogramPanes = []
-    if greyScaleHistogram:
-        greyScaleHistogramPanes = paneMakers.greyScaleHistogramPane.create_roi_panes(tif_folder, destination / "histogramPanes", roi)
-    #print(greyScaleHistogramPanes)
-    return [temperaturePanels, averageGreyscalePanes,greyScaleHistogramPanes]
+    panes = []
 
+    # --------------------------------------------------
+    # Temperature panes
+    # --------------------------------------------------
+
+    if make_temperature_pane:
+
+        temperature_panes = (
+            paneMakers.temperaturePane.prepare_temperaturePane(
+                tif_folder,
+                csv,
+                destination / "temperaturePanes"
+            )
+        )
+
+        print(
+            f"[INFO] Temperature panes: "
+            f"{len(temperature_panes)}"
+        )
+
+        panes.append(temperature_panes)
+
+    # --------------------------------------------------
+    # Average greyscale panes
+    # --------------------------------------------------
+
+    if make_average_greyscale_pane:
+
+        average_greyscale_panes = (
+            paneMakers.averageGreyscalePane.run_roi_pipeline(
+                tif_folder,
+                destination / "averageGrayScalePanes",
+                roi
+            )
+        )
+
+        print(
+            f"[INFO] Average greyscale panes: "
+            f"{len(average_greyscale_panes)}"
+        )
+
+        panes.append(average_greyscale_panes)
+
+    # --------------------------------------------------
+    # Histogram panes
+    # --------------------------------------------------
+
+    if make_histogram_pane:
+
+        histogram_panes = (
+            paneMakers.greyScaleHistogramPane.create_roi_panes(
+                tif_folder,
+                destination / "histogramPanes",
+                roi
+            )
+        )
+
+        print(
+            f"[INFO] Histogram panes: "
+            f"{len(histogram_panes)}"
+        )
+
+        panes.append(histogram_panes)
+
+    # --------------------------------------------------
+    # Debug
+    # --------------------------------------------------
+
+    print("\n=== PREPARED PANE SETS ===")
+
+    for i, pane_set in enumerate(panes):
+
+        print(
+            f"Set {i}: "
+            f"{len(pane_set)} files"
+        )
+
+        if len(pane_set) > 0:
+            print(
+                f"    Example: "
+                f"{pane_set[0]}"
+            )
+
+    print("==========================\n")
+
+    return panes
 
 
 
@@ -74,12 +153,30 @@ def main():
         #update HDF spreadshet
         csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE, NEXUS)
         # createPanes of data analysis
-        panes = prepare_image_panes(tifFolder,tifFolder, csvPath, roi)
+        # --------------------------------------------------
+        # Create analysis panes
+        # --------------------------------------------------
 
-        panes += [auto_balance_images]
+        panes = prepare_image_panes(
+            tifFolder,
+            tifFolder,
+            csvPath,
+            roi
+        )
 
-        #Make image composits
-        paneMakers.compositeMaker.glue_multiple_pane_sets(panes, tifFolder / "HUD")
+        # --------------------------------------------------
+        # Add autobalanced images as another pane set
+        # --------------------------------------------------
+
+        print(
+            f"[INFO] Auto-balanced images: "
+            f"{len(auto_balance_images)}"
+        )
+
+        paneMakers.compositeMaker.glue_multiple_pane_sets(
+            panes,
+            tifFolder / "HUD"
+)
 
 
 

@@ -308,34 +308,6 @@ def save(img, path):
 	print("Created", len(created_images), "images")
 
 	return created_images
-tack(files, badfilelog)
-
-				if summed is None:
-					continue
-
-				if window_sum is None:
-					window_sum = np.zeros_like(summed, dtype=np.float32)
-
-				window_sum += summed
-
-			if window_sum is None:
-				continue
-			#print(type(open_beam))
-			img = normalize_by_open_beam(window_sum, open_beam)
-			img = rotate(img)
-
-			out_path = out_dir / f"GlobalRunWindow_{start_run}_{end_run}.tif"
-			#print(out_path)
-
-			save(img, out_path)
-			created_images.append(out_path)
-			images_made += 1
-
-	print("Created ", images_made, " images")
-
-	return created_images
-
-
 from pathlib import Path
 import numpy as np
 from PIL import Image
