@@ -2,13 +2,15 @@ import paneMakers.rolledImagePanes
 import paneMakers.temperaturePane
 import paneMakers.averageGreyscalePane
 import paneMakers.compositeMaker
+import paneMakers.roi_selector
+import paneMakers.greyScaleHistogramPane
 from pathlib import Path
 import re
 import numpy as np
 from PIL import Image
 import populateHDFSpreadSheet
-
-
+import matplotlib.pyplot as plt
+from matplotlib.widgets import RectangleSelector
 MASTER_IMAGE_SOURCE = Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/") #The IPTS folder that contains all data
 ENERGY_FRAME_MIN = 560# The specific images per run, correspond to ToF Energy
 ENERGY_FRAME_MAX = 830
@@ -36,8 +38,11 @@ def prepare_image_panes(tif_folder, destination, csv):
     if temperaturePane:
         temperaturePanels = paneMakers.temperaturePane.prepare_temperaturePane(tif_folder, csv, destination / "temperaturePanes")
     averageGreyscalePanes = []
+    roi = ""
     if averageGreyscalePane:
-        averageGreyscalePanes = paneMakers.averageGreyscalePane.run_roi_pipeline(tif_folder, destination / "averageGrayScalePanes")
+        if roi == "":
+            roi = paneMakers.roi_selector.select_roi(tif_folder)
+        averageGreyscalePanes = paneMakers.averageGreyscalePane.run_roi_pipeline(tif_folder, destination / "averageGrayScalePanes", roi)
 
     return [temperaturePanels, averageGreyscalePanes]
 
@@ -48,12 +53,14 @@ def prepare_image_panes(tif_folder, destination, csv):
 def main():
     roll = ROLL_LENGTH_IN_MIN
     #Make the tif files, avoiding making already made data
-    tifPaths = paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, ob_path = OB_PATH, roll_length = roll)
+    tifPaths, auto_balance_images = paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, ob_path = OB_PATH, roll_length = roll)
+    #path to tif folder 
+      
     #update HDF spreadshet
     csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE)
     # createPanes of data analysis
     panes = prepare_image_panes(MASTER_DESTINATION / (str(roll) +"rolls"), MASTER_DESTINATION / (str(roll) +"rolls"), csvPath)
-    panes.append(tifPaths)
+    panes.append(auto_balance_images)
     #Make image composits
     paneMakers.compositeMaker.glue_multiple_pane_sets(panes, MASTER_DESTINATION / "HUD")
 

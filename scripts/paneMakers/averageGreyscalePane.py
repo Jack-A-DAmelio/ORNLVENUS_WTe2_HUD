@@ -4,25 +4,13 @@ import matplotlib.pyplot as plt
 
 from pathlib import Path
 from PIL import Image
-from matplotlib.widgets import RectangleSelector
+
 
 
 # ==========================================================
 # DISPLAY NORMALIZATION
 # ==========================================================
 
-def to_display(img):
-
-    img = img.astype(np.float32)
-
-    lo = np.percentile(img, 1)
-    hi = np.percentile(img, 99)
-
-    return np.clip(
-        (img - lo) / (hi - lo + 1e-8),
-        0,
-        1
-    )
 
 
 # ==========================================================
@@ -220,7 +208,7 @@ def make_roi_panel(
 
 def prepare_roiPane(
     tif_folder,
-    output_folder,
+    output_folder, roi,
     N=10
 ):
 
@@ -250,8 +238,7 @@ def prepare_roiPane(
     Image.open(tiff_files[0])
     )
 
-    roi = select_roi(first_img)
-
+    roi = roi
     roi_means = compute_roi_means(
         tiff_files,
         roi
@@ -382,13 +369,13 @@ def save_roi_summary(
 
 def run_roi_pipeline(
     tif_folder,
-    output_folder,
+    output_folder, roi,
     N=10
 ):
     print("average greyscale panes")
     pane_paths, records = prepare_roiPane(
         tif_folder,
-        output_folder,
+        output_folder, roi,
         N=N
     )
 

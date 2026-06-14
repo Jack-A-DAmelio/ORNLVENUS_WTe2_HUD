@@ -298,10 +298,75 @@ def process_runs_rolling_global(master_image_source, file_destination, run_numbe
 	return created_images
 
 
+from pathlib import Path
+import numpy as np
+from PIL import Image
 
 
-def batch_process_images_into_rolls(master_image_source, run_number_range, master_file_destination, scanLen_min, ob_path, roll_length): #will perform a series of data processing steps, and then caclulate plots to make composite image
-    def grey_balance(arr, low=1, high=99):
+def auto_balance_images(allImages):
+
+    if len(allImages) == 0:
+        return []
+
+    # Determine source folder
+    source_folder = Path(allImages[0]).parent
+
+    # Create sibling output folder
+    output_folder = (
+        source_folder /
+        f"{source_folder.name}_autobalanced"
+    )
+
+    output_folder.mkdir(
+        parents=True,
+        exist_ok=True
+    )
+
+    balancedImages = []
+
+    for img_path in allImages:
+
+        img_path = Path(img_path)
+
+        arr = np.array(
+            Image.open(img_path)
+        )
+
+        arr = np.squeeze(arr)
+
+        if arr.ndim == 2:
+            arr = np.stack(
+                [arr] * 3,
+                axis=-1
+            )
+
+        arr = grey_balance(arr)
+
+        arr = np.clip(
+            arr,
+            0,
+            1
+        )
+
+        arr = (
+            arr * 255
+        ).astype(np.uint8)
+
+        out_path = (
+            output_folder /
+            img_path.name
+        )
+
+        Image.fromarray(arr).save(
+            out_path
+        )
+
+        balancedImages.append(
+            out_path
+        )
+
+    return balancedImages
+def grey_balance(arr, low=1, high=99):
         """
         Percentile-based contrast normalization.
         Works on grayscale or RGB uint16/float images.
@@ -336,6 +401,8 @@ def batch_process_images_into_rolls(master_image_source, run_number_range, maste
 
         
         return np.clip(arr, 0, 1)
+def batch_process_images_into_rolls(master_image_source, run_number_range, master_file_destination, scanLen_min, ob_path, roll_length): #will perform a series of data processing steps, and then caclulate plots to make composite image
+    
     #Creation of simple division normalized images, some of which will be summed ("Rolled") for higher contrast
     #choose roll lengths
     roll_lengths = [roll_length]
@@ -412,27 +479,12 @@ def batch_process_images_into_rolls(master_image_source, run_number_range, maste
         #print(ASTER_DESTINATION / (str(roll) +"rolls") / tif)
         allImages = tifPaths + newImages
         
-        balancedImages = []
+        balancedImages = auto_balance_images(allImages)
 
-        for img_path in allImages:
-
-            arr = np.array(Image.open(img_path))
-
-            arr = np.squeeze(arr)
-
-            if arr.ndim == 2:
-                arr = np.stack([arr]*3, axis=-1)
-
-            arr = grey_balance(arr)
-
-            arr = (arr * 255).astype(np.uint8)
-
-            Image.fromarray(arr).save(img_path)
-
-            balancedImages.append(img_path)
+      
         
   
-        return balancedImages
+        return allImages, balancedImages
 
 
 # ==========================================================
