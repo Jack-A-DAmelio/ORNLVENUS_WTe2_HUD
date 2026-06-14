@@ -351,7 +351,7 @@ def batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, r
 
 
 def main():
-    roll = 5
+    roll = 60
     tifPaths = batch_process_images_into_rolls(roll_length = roll)
    
     csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE)
