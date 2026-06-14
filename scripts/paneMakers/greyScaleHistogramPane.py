@@ -1,424 +1,226 @@
-import os
-import re
-import json
-import tifffile
-import numpy as np
+import os,re,json,csv,tifffile,numpy as np,matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
-import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 from pathlib import Path
 from PIL import Image
 
 # ==========================================================
-# IMAGE IO
+# IO
 # ==========================================================
 
-def load_image(image_path):
-    return tifffile.imread(image_path)
+def load_image(p): return tifffile.imread(p)
 
-
-# ==========================================================
-# RUN PARSING (UNCHANGED)
-# ==========================================================
-
-def extract_run_number(filename):
-    match = re.search(r"_(\d+_\d+)", filename)
-
-    if match:
-        return match.group(1)
-
-    raise ValueError("Could not extract run number from filename.")
-
+def extract_run_number(f):
+    m=re.search(r"_(\d+_\d+)",f)
+    if m: return m.group(1)
+    raise ValueError("no run number found")
 
 # ==========================================================
-# ROI SELECTION (UNCHANGED FUNCTIONALITY)
+# ROI
 # ==========================================================
 
-def select_roi(image):
+def select_roi(img):
+    roi={}
+    fig,ax=plt.subplots(figsize=(8,8))
+    ax.imshow(img,cmap="gray");ax.set_title("Select ROI then close")
 
-    roi = {}
+    def on_select(e1,e2):
+        x1,y1,x2,y2=int(e1.xdata),int(e1.ydata),int(e2.xdata),int(e2.ydata)
+        roi["x1"],roi["x2"]=min(x1,x2),max(x1,x2)
+        roi["y1"],roi["y2"]=min(y1,y2),max(y1,y2)
+        print("ROI:",roi)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
-    ax.imshow(image, cmap="gray")
-    ax.set_title("Select ROI and close window")
-
-    def on_select(eclick, erelease):
-
-        x1 = int(eclick.xdata)
-        y1 = int(eclick.ydata)
-        x2 = int(erelease.xdata)
-        y2 = int(erelease.ydata)
-
-        roi["x1"] = min(x1, x2)
-        roi["x2"] = max(x1, x2)
-        roi["y1"] = min(y1, y2)
-        roi["y2"] = max(y1, y2)
-
-        print("ROI selected:", roi)
-
-    RectangleSelector(ax, on_select, useblit=True, button=[1], interactive=True)
-
+    RectangleSelector(ax,on_select,useblit=True,button=[1],interactive=True)
     plt.show()
 
-    if not roi:
-        raise RuntimeError("No ROI selected")
-
+    if not roi: raise RuntimeError("No ROI selected")
     return roi
 
-
-def save_roi(roi, output_folder):
-    path = Path(output_folder) / "ROI_coordinates.json"
-
-    with open(path, "w") as f:
-        json.dump(roi, f, indent=4)
-
-    print(f"ROI saved: {path}")
-
+def save_roi(roi,out):
+    p=Path(out)/"ROI_coordinates.json"
+    json.dump(roi,open(p,"w"),indent=2)
+    print("saved:",p)
 
 # ==========================================================
-# CROPPING
+# IMAGE OPS
 # ==========================================================
 
-def crop_image(image, roi):
-    return image[
-        roi["y1"]:roi["y2"],
-        roi["x1"]:roi["x2"]
-    ]
+def crop_image(img,roi):
+    return img[roi["y1"]:roi["y2"],roi["x1"]:roi["x2"]]
 
-
-# ==========================================================
-# HISTOGRAM
-# ==========================================================
-
-def calculate_histogram(image, bins=500):
-
-    pixels = image.flatten()
-
-    histogram, edges = np.histogram(
-        pixels,
-        bins=bins,
-        range=(pixels.min(), pixels.max())
-    )
-
-    grey_values = (edges[:-1] + edges[1:]) / 2
-
-    return grey_values, histogram
-
+def calculate_histogram(img,bins=500):
+    px=img.ravel()
+    px=px[(px!=0.0)&(px!=1.0)]
+    h,e=np.histogram(px,bins=bins,range=(px.min(),px.max()))
+    g=(e[:-1]+e[1:])/2
+    return g,h
 
 # ==========================================================
-# GAUSSIANS (UNCHANGED MATH)
+# MODELS
 # ==========================================================
 
-def gaussian(x, amplitude, mean, sigma):
-    return amplitude * np.exp(
-        -(x - mean) ** 2 / (2 * sigma ** 2)
-    )
+def gaussian(x,a,m,s):
+    return a*np.exp(-(x-m)**2/(2*s**2))
 
+def double_gaussian(x,a1,m1,s1,a2,m2,s2):
+    return gaussian(x,a1,m1,s1)+gaussian(x,a2,m2,s2)
 
-def double_gaussian(x,
-                    amp1, mean1, sigma1,
-                    amp2, mean2, sigma2):
+def fit_gaussians(g,h):
+    mu=np.average(g,weights=h)
+    sg=np.sqrt(np.average((g-mu)**2,weights=h))
+    amp=h.max()
 
-    return (
-        gaussian(x, amp1, mean1, sigma1)
-        + gaussian(x, amp2, mean2, sigma2)
-    )
+    p1,_=curve_fit(gaussian,g,h,p0=[amp,mu,sg])
 
-
-# ==========================================================
-# FITTING (UNCHANGED LOGIC)
-# ==========================================================
-
-def fit_gaussians(grey_values, histogram):
-
-    mean_guess = np.average(grey_values, weights=histogram)
-    sigma_guess = np.sqrt(
-        np.average((grey_values - mean_guess) ** 2, weights=histogram)
-    )
-
-    amp_guess = histogram.max()
-
-    # -------------------------
-    # 1 Gaussian
-    # -------------------------
-    popt1, _ = curve_fit(
-        gaussian,
-        grey_values,
-        histogram,
-        p0=[amp_guess, mean_guess, sigma_guess]
-    )
-
-    # -------------------------
-    # 2 Gaussian
-    # -------------------------
-    midpoint = len(grey_values) // 2
-
-    popt2, _ = curve_fit(
-        double_gaussian,
-        grey_values,
-        histogram,
-        p0=[
-            amp_guess / 2,
-            grey_values[midpoint // 2],
-            sigma_guess / 2,
-
-            amp_guess / 2,
-            grey_values[midpoint + midpoint // 2],
-            sigma_guess / 2
-        ],
+    mid=len(g)//2
+    p2,_=curve_fit(
+        double_gaussian,g,h,
+        p0=[amp/2,g[mid//2],sg/2,amp/2,g[mid+mid//2],sg/2],
         maxfev=10000
     )
 
-    fit1 = gaussian(grey_values, *popt1)
-    fit2 = double_gaussian(grey_values, *popt2)
+    r1=np.sum((h-gaussian(g,*p1))**2)
+    r2=np.sum((h-double_gaussian(g,*p2))**2)
 
-    rss1 = np.sum((histogram - fit1) ** 2)
-    rss2 = np.sum((histogram - fit2) ** 2)
-
-    return popt1, popt2, rss1, rss2
-
+    return p1,p2,r1,r2
 
 # ==========================================================
-# PLOTTING (UNCHANGED OUTPUT)
+# PLOTTING
 # ==========================================================
 
-def plot_gaussian_comparison(
-        grey_values,
-        histogram,
-        popt1,
-        popt2,
-        rss1,
-        rss2,
-        output_folder,
-        run_number,
-        save_plot=True,
-        show_plot=False):
+def plot_gaussian_comparison(g,h,p1,p2,r1,r2,out,run,save=True,show=False):
+    plt.figure(figsize=(8,6))
+    plt.plot(g,h,label="hist")
+    plt.plot(g,gaussian(g,*p1),label=f"1G RSS={r1:.2e}")
+    plt.plot(g,double_gaussian(g,*p2),label=f"2G RSS={r2:.2e}")
+    plt.xlabel("grey");plt.ylabel("count");plt.title(run)
+    plt.legend();plt.tight_layout()
 
-    plt.figure(figsize=(8, 6))
+    if save:
+        p=Path(out)/f"GaussianFitComparison_{run}.png"
+        plt.savefig(p,dpi=300,bbox_inches="tight")
+        print("saved:",p)
 
-    plt.plot(grey_values, histogram, label="Histogram")
-
-    plt.plot(
-        grey_values,
-        gaussian(grey_values, *popt1),
-        label=f"1 Gaussian RSS={rss1:.2e}"
-    )
-
-    plt.plot(
-        grey_values,
-        double_gaussian(grey_values, *popt2),
-        label=f"2 Gaussian RSS={rss2:.2e}"
-    )
-
-    plt.xlabel("Grey Value")
-    plt.ylabel("Pixel Count")
-    plt.title(f"Gaussian Fit Comparison - {run_number}")
-    plt.legend()
-    plt.tight_layout()
-
-    if save_plot:
-        path = Path(output_folder) / f"GaussianFitComparison_{run_number}.png"
-        plt.savefig(path, dpi=300, bbox_inches="tight")
-        print(f"Saved: {path}")
-
-    if show_plot:
+    if show:
         plt.show()
     else:
         plt.close()
 
-
 # ==========================================================
-# FIT RESULTS SAVE (UNCHANGED)
-# ==========================================================
-
-def save_fit_results(popt1, popt2, rss1, rss2, output_folder, run_number):
-
-    amp1, mean1, sigma1 = popt1
-
-    # popt2 is a 2-Gaussian model (6 parameters)
-    amp2_1, mean2_1, sigma2_1, amp2_2, mean2_2, sigma2_2 = popt2
-
-    path = Path(output_folder) / f"GaussianFit_{run_number}.csv"
-
-    data = np.array([[
-        amp1, mean1, sigma1,
-        amp2_1, mean2_1, sigma2_1,
-        amp2_2, mean2_2, sigma2_2,
-        rss1, rss2
-    ]])
-
-    header = (
-        "Amp1,Mean1,Sigma1,"
-        "Amp2_A,Mean2_A,Sigma2_A,"
-        "Amp2_B,Mean2_B,Sigma2_B,"
-        "RSS1,RSS2"
-    )
-
-    np.savetxt(path, data, delimiter=",", header=header, comments="")
-
-    print(f"Saved: {path}")
-
-# ==========================================================
-# PIPELINE WRAPPER (NEW - YOUR WORKFLOW INTEGRATION)
+# CSV SYSTEM (FIXED: CSV WRITER USED PROPERLY)
 # ==========================================================
 
-def process_image(image_path, output_folder, bins=500, show=False):
+def init_dataset_csv(folder):
+    csv_path=Path(folder)/"parameters.csv"
+    csv_path.parent.mkdir(parents=True,exist_ok=True)
 
-    image = load_image(image_path)
+    if not csv_path.exists():
+        with open(csv_path,"w",newline="") as f:
+            csv.writer(f).writerow([
+                "tiff","run","roi",
+                "g1_amp","g1_mean","g1_sigma","rss_1g",
+                "g2_amp1","g2_mean1","g2_sigma1",
+                "g2_amp2","g2_mean2","g2_sigma2","rss_2g",
+                "delta_rss","better_model","error"
+            ])
 
-    run_number = extract_run_number(Path(image_path).name)
+    return csv_path
 
-    roi = select_roi(image)
-    save_roi(roi, output_folder)
+def append_dataset_row(csv_path,tiff,run,roi,p1,p2,r1,r2,error=None):
 
-    roi_image = crop_image(image, roi)
+    g1_amp,g1_mean,g1_sigma=p1
+    g2_amp1,g2_mean1,g2_sigma1,g2_amp2,g2_mean2,g2_sigma2=p2
 
-    grey_values, histogram = calculate_histogram(roi_image, bins=bins)
+    delta_rss=r1-r2
+    better_model="1G" if r1<r2 else "2G"
 
-    popt1, popt2, rss1, rss2 = fit_gaussians(grey_values, histogram)
+    row=[
+        str(tiff),
+        run,
+        json.dumps(roi,separators=(",",":")),
+        g1_amp,g1_mean,g1_sigma,r1,
+        g2_amp1,g2_mean1,g2_sigma1,
+        g2_amp2,g2_mean2,g2_sigma2,
+        r2,
+        delta_rss,
+        better_model,
+        error if error else ""
+    ]
 
-    save_fit_results(
-        popt1, popt2, rss1, rss2,
-        output_folder,
-        run_number
-    )
-
-    plot_gaussian_comparison(
-        grey_values,
-        histogram,
-        popt1,
-        popt2,
-        rss1,
-        rss2,
-        output_folder,
-        run_number,
-        show_plot=show
-    )
-
-    return {
-        "run": run_number,
-        "roi": roi,
-        "popt1": popt1,
-        "popt2": popt2,
-        "rss1": rss1,
-        "rss2": rss2
-    }
-
+    with open(csv_path,"a",newline="") as f:
+        csv.writer(f).writerow(row)
 
 # ==========================================================
-# PIPELINE: ROI PANES + FITTING
+# SINGLE IMAGE PIPELINE
 # ==========================================================
 
-def create_roi_panes(
-    tif_folder,
-    destination,
-    roi,
-    bins=500,
-    show=False
-):
+def process_image(path,out,bins,show=False):
+    img=load_image(path)
+    run=extract_run_number(Path(path).name)
 
-    tif_folder = Path(tif_folder)
-    destination = Path(destination)
-    destination.mkdir(parents=True, exist_ok=True)
+    roi=select_roi(img)
+    save_roi(roi,out)
 
-    tiff_files = sorted(tif_folder.glob("*.tif"))
+    crop=crop_image(img,roi)
+    g,h=calculate_histogram(crop,bins)
 
-    if len(tiff_files) == 0:
-        raise ValueError("No TIFF files found")
+    error=None
+    try:
+        p1,p2,r1,r2=fit_gaussians(g,h)
+    except Exception as e:
+        p1=[np.nan]*3
+        p2=[np.nan]*6
+        r1=r2=np.nan
+        error=str(e)
 
-    print(f"[INFO] Found {len(tiff_files)} TIFF files")
+    plot_gaussian_comparison(g,h,p1,p2,r1,r2,out,run,show=show)
 
-    pane_paths = []
+    csv_path=init_dataset_csv(out)
+    append_dataset_row(csv_path,path,run,roi,p1,p2,r1,r2,error)
 
-    # ==========================================================
-    # STEP 1: PRECOMPUTE GLOBAL Y-SCALE (for consistent plots)
-    # ==========================================================
+    return {"run":run,"roi":roi,"p1":p1,"p2":p2,"r1":r1,"r2":r2,"error":error}
 
-    all_histograms = []
+# ==========================================================
+# BATCH PIPELINE
+# ==========================================================
 
-    for tif in tiff_files:
+def create_roi_panes(folder,dest,roi,bins=100,show=False):
+    folder,dest=Path(folder),Path(dest)
+    dest.mkdir(parents=True,exist_ok=True)
 
-        img = np.array(Image.open(tif))
+    csv_path=init_dataset_csv(dest)
 
-        x1, x2, y1, y2 = roi
-        roi_pixels = img[y1:y2, x1:x2].ravel()
+    files=sorted(folder.glob("*.tif"))
+    if not files:
+        raise ValueError("no tif files found")
 
-        counts, _ = np.histogram(
-            roi_pixels,
-            bins=bins
-        )
+    print(f"[INFO] {len(files)} files")
+    pane=[]
 
-        all_histograms.append(counts)
+    for i,f in enumerate(files):
+        print(f"[PROCESS] {i+1}/{len(files)} {f.name}")
 
-    y_max = float(np.max(all_histograms))
+        img=np.array(Image.open(f))
+        x1,x2,y1,y2=roi
+        crop=img[y1:y2,x1:x2]
 
-    # ==========================================================
-    # STEP 2: PROCESS EACH IMAGE USING YOUR EXISTING PIPELINE
-    # ==========================================================
+        g,h=calculate_histogram(crop,bins)
 
-    for i, tif in enumerate(tiff_files):
+        error=None
+        try:
+            p1,p2,r1,r2=fit_gaussians(g,h)
+        except Exception as e:
+            p1=[np.nan]*3
+            p2=[np.nan]*6
+            r1=r2=np.nan
+            error=str(e)
 
-        print(f"[PROCESS] {i+1}/{len(tiff_files)}: {tif.name}")
+        run=f.stem
 
-        image = np.array(Image.open(tif))
+        plot_gaussian_comparison(g,h,p1,p2,r1,r2,dest,run,save=True,show=show)
 
-        run_number = tif.stem
+        append_dataset_row(csv_path,f,run,roi,p1,p2,r1,r2,error)
 
-        # --------------------------------------------------
-        # ROI crop (same logic as process_image, but reused here)
-        # --------------------------------------------------
-        x1, x2, y1, y2 = roi
-        roi_image = image[y1:y2, x1:x2]
+        pane.append(Path(dest)/f"GaussianFitComparison_{run}.png")
 
-        # --------------------------------------------------
-        # histogram
-        # --------------------------------------------------
-        grey_values, histogram = calculate_histogram(
-            roi_image,
-            bins=bins
-        )
-
-        # --------------------------------------------------
-        # fit (UNCHANGED MODEL)
-        # --------------------------------------------------
-        popt1, popt2, rss1, rss2 = fit_gaussians(
-            grey_values,
-            histogram
-        )
-
-        # --------------------------------------------------
-        # plot (same comparison function you already have)
-        # --------------------------------------------------
-        plot_gaussian_comparison(
-            grey_values,
-            histogram,
-            popt1,
-            popt2,
-            rss1,
-            rss2,
-            output_folder=destination,
-            run_number=run_number,
-            save_plot=True,
-            show_plot=show
-        )
-
-        # --------------------------------------------------
-        # save parameters
-        # --------------------------------------------------
-        save_fit_results(
-            popt1,
-            popt2,
-            rss1,
-            rss2,
-            output_folder=destination,
-            run_number=run_number
-        )
-
-        # --------------------------------------------------
-        # store pane path
-        # --------------------------------------------------
-        pane_paths.append(
-            Path(destination) / f"GaussianFitComparison_{run_number}.png"
-        )
-    
-    return pane_paths
+    return pane

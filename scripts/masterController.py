@@ -1,187 +1,65 @@
 import sys
 from pathlib import Path
 
-SCRIPTS_ROOT = "/SNS/VENUS/IPTS-36967/shared/Jack/fullHUDscripting/ORNLVENUS_HUD_WTe2/scripts"
-sys.path.insert(0, SCRIPTS_ROOT)
+SCRIPTS_ROOT="/SNS/VENUS/IPTS-36967/shared/Jack/fullHUDscripting/ORNLVENUS_HUD_WTe2/scripts"
+sys.path.insert(0,SCRIPTS_ROOT)  # allow local module imports
 
 import paneMakers.rolledImagePanes
-import paneMakers.temperaturePane
-import paneMakers.averageGreyscalePane
+
 import paneMakers.compositeMaker
 import paneMakers.roi_selector
-import paneMakers.greyScaleHistogramPane
-from pathlib import Path
-import re
-import numpy as np
+
+import controllerMethods
+import re,numpy as np,matplotlib.pyplot as plt
 from PIL import Image
 import populateHDFSpreadSheet
-import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
-NEXUS = "/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
 
+NEXUS="/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
 
-MASTER_IMAGE_SOURCE = Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/") #The IPTS folder that contains all data
-ENERGY_FRAME_MIN = 560# The specific images per run, correspond to ToF Energy
-ENERGY_FRAME_MAX = 830
+MASTER_IMAGE_SOURCE=Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/")
+ENERGY_FRAME_MIN=560  # lower TOF energy window bound
+ENERGY_FRAME_MAX=830  # upper TOF energy window bound
 
+STARTING_RUN_NUMBER=23139
+ENDING_RUN_NUMBER=23141
+RUN_NUMBERS=list(range(STARTING_RUN_NUMBER,ENDING_RUN_NUMBER+1))  # run range list
 
+EXPECTED_IMAGE_DURATION=5  # seconds per frame
+ROLL_LENGTH_IN_MIN=[5]  # roll grouping size in minutes
 
-STARTING_RUN_NUMBER = 23139# THe run number to be analyzed
-ENDING_RUN_NUMBER = 23141
-RUN_NUMBERS = list(range(STARTING_RUN_NUMBER, ENDING_RUN_NUMBER + 1))
-
-EXPECTED_IMAGE_DURATION = 5 #How long one frame was collected for, not the total length of the rolled frames
-ROLL_LENGTH_IN_MIN = [5] # how long the total roll is, should be a multiple of EXPECTED_IMAGE_DURATION
-
-MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest_SampleD/") #Where are these files will go
-OB_PATH = Path(
-	"/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")# the ob for the whole roll, make sure hte length is right
-
-def prepare_image_panes(
-    tif_folder,
-    destination,
-    csv,
-    roi=False
-):
-
-    make_temperature_pane = True
-    make_average_greyscale_pane = True
-    make_histogram_pane = True
-
-    panes = []
-
-    # --------------------------------------------------
-    # Temperature panes
-    # --------------------------------------------------
-
-    if make_temperature_pane:
-
-        temperature_panes = (
-            paneMakers.temperaturePane.prepare_temperaturePane(
-                tif_folder,
-                csv,
-                destination / "temperaturePanes"
-            )
-        )
-
-        print(
-            f"[INFO] Temperature panes: "
-            f"{len(temperature_panes)}"
-        )
-
-        panes.append(temperature_panes)
-
-    # --------------------------------------------------
-    # Average greyscale panes
-    # --------------------------------------------------
-
-    if make_average_greyscale_pane:
-
-        average_greyscale_panes = (
-            paneMakers.averageGreyscalePane.run_roi_pipeline(
-                tif_folder,
-                destination / "averageGrayScalePanes",
-                roi
-            )
-        )
-
-        print(
-            f"[INFO] Average greyscale panes: "
-            f"{len(average_greyscale_panes)}"
-        )
-
-        panes.append(average_greyscale_panes)
-
-    # --------------------------------------------------
-    # Histogram panes
-    # --------------------------------------------------
-
-    if make_histogram_pane:
-
-        histogram_panes = (
-            paneMakers.greyScaleHistogramPane.create_roi_panes(
-                tif_folder,
-                destination / "histogramPanes",
-                roi
-            )
-        )
-
-        print(
-            f"[INFO] Histogram panes: "
-            f"{len(histogram_panes)}"
-        )
-
-        panes.append(histogram_panes)
-
-    # --------------------------------------------------
-    # Debug
-    # --------------------------------------------------
-
-    print("\n=== PREPARED PANE SETS ===")
-
-    for i, pane_set in enumerate(panes):
-
-        print(
-            f"Set {i}: "
-            f"{len(pane_set)} files"
-        )
-
-        if len(pane_set) > 0:
-            print(
-                f"    Example: "
-                f"{pane_set[0]}"
-            )
-
-    print("==========================\n")
-
-    return panes
-
+MASTER_DESTINATION=Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest_SampleD/")
+OB_PATH=Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")
 
 
 
 def main():
-    roi = False
+    roi=False  # ROI is selected once and reused across rolls
+
     for roll in ROLL_LENGTH_IN_MIN:
+        tifFolder=MASTER_DESTINATION/(str(roll)+"rolls") 
+        #tifPaths,auto_balance_images=paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source=MASTER_IMAGE_SOURCE, run_number_range=RUN_NUMBERS, master_file_destination=MASTER_DESTINATION, scanLen_min=EXPECTED_IMAGE_DURATION, nexus=NEXUS, ob_path=OB_PATH, roll_length=roll)  # generate rolled TIFF datasets + auto-balanced images
+        tifPaths,auto_balance = controllerMethods.load_existing_roll_outputs(tifFolder)
+         # output folder for this roll group
 
-        #Make the tif files, avoiding making already made data
-        tifPaths, auto_balance_images = paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, nexus=NEXUS, ob_path = OB_PATH, roll_length = roll)
-        tifFolder = MASTER_DESTINATION / (str(roll) +"rolls")
-        if roi == False:#Only make the ROI once for whole batch
-            roi = paneMakers.roi_selector.select_roi(tifFolder)
-        #path to tif folder 
-        
-        #update HDF spreadshet
-        csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE, NEXUS)
-        # createPanes of data analysis
-        # --------------------------------------------------
-        # Create analysis panes
-        # --------------------------------------------------
+        if roi==False:
+            roi=paneMakers.roi_selector.select_roi(tifFolder)  # user selects ROI once per batch
 
-        panes = prepare_image_panes(
-            tifFolder,
-            tifFolder,
-            csvPath,
-            roi
-        )
+        csvPath=populateHDFSpreadSheet.update_HDF_sheet(
+            MASTER_DESTINATION/"HDFSpreadsheet",
+            MASTER_IMAGE_SOURCE,
+            NEXUS
+        )  # regenerate/update metadata spreadsheet
 
-        # --------------------------------------------------
-        # Add autobalanced images as another pane set
-        # --------------------------------------------------
+        panes=controllerMethods.prepare_image_panes(tifFolder,tifFolder,csvPath,roi)  # build all analysis panes
 
-        print(
-            f"[INFO] Auto-balanced images: "
-            f"{len(auto_balance_images)}"
-        )
-
+       
         paneMakers.compositeMaker.glue_multiple_pane_sets(
             panes,
-            tifFolder / "HUD"
-)
-
-
+            tifFolder/"HUD"
+        )  # combine all outputs into final HUD composite
 
     return 0
 
-	
-if __name__ == "__main__":
-	main()
+if __name__=="__main__":
+    main()
