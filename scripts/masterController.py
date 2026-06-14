@@ -1,3 +1,9 @@
+import sys
+from pathlib import Path
+
+SCRIPTS_ROOT = "/SNS/VENUS/IPTS-36967/shared/Jack/fullHUDscripting/ORNLVENUS_HUD_WTe2/scripts"
+sys.path.insert(0, SCRIPTS_ROOT)
+
 import paneMakers.rolledImagePanes
 import paneMakers.temperaturePane
 import paneMakers.averageGreyscalePane
@@ -47,7 +53,7 @@ def prepare_image_panes(tif_folder, destination, csv, roi = False):
     greyScaleHistogramPanes = []
     if greyScaleHistogram:
         greyScaleHistogramPanes = paneMakers.greyScaleHistogramPane.create_roi_panes(tif_folder, destination / "histogramPanes", roi)
-    print(greyScaleHistogramPanes)
+    #print(greyScaleHistogramPanes)
     return [temperaturePanels, averageGreyscalePanes,greyScaleHistogramPanes]
 
 
@@ -69,7 +75,9 @@ def main():
         csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE, NEXUS)
         # createPanes of data analysis
         panes = prepare_image_panes(tifFolder,tifFolder, csvPath, roi)
-        panes.append(auto_balance_images)
+
+        panes += [auto_balance_images]
+
         #Make image composits
         paneMakers.compositeMaker.glue_multiple_pane_sets(panes, tifFolder / "HUD")
 

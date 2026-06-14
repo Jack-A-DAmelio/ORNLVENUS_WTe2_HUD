@@ -1,36 +1,46 @@
 from pathlib import Path
-import re
 import numpy as np
 from PIL import Image
-import populateHDFSpreadSheet
 
-def glue_multiple_pane_sets(
-    pane_lists,
-    output_folder
-):
-    """
-    pane_lists:
-        [
-            [Path(...), Path(...), ...],
-            [Path(...), Path(...), ...],
-            [Path(...), Path(...), ...]
-        ]
 
-    output:
-        one glued image for each matching run range
-    """
+# ==========================================================
+# LOAD IMAGE
+# ==========================================================
+
+def load_image(path):
+    img = Image.open(path)
+    arr = np.array(img)
+    arr = np.squeeze(arr)
+
+    if arr.ndim == 2:
+        arr = np.stack([arr]*3, axis=-1)
+
+    elif arr.ndim == 3 and arr.shape[2] > 3:
+        arr = arr[:, :, :3]
+
+    arr = arr.astype(np.float32)
+    arr -= arr.min()
+
+    if arr.max() > 0:
+        arr /= arr.max()
+
+    return (arr * 255).astype(np.uint8)
+
+
+# ==========================================================
+# GLUE FUNCTION (PURE STRING MATCHING)
+# ==========================================================
+
+def glue_multiple_pane_sets(pane_lists, output_folder):
 
     output_folder = Path(output_folder)
-    output_folder.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------
-    # build lookup tables
+    # STEP 1: map basename (NO EXT) → full path
     # --------------------------------------------------
 
-    pane_maps = []
+    maps = []
 
     for pane_list in pane_lists:
 
@@ -40,96 +50,47 @@ def glue_multiple_pane_sets(
 
             p = Path(p)
 
-            m = re.search(
-                r'(\d+)_(\d+)',
-                p.stem
-            )
-
-            if m is None:
-                continue
-
-            key = (
-                int(m.group(1)),
-                int(m.group(2))
-            )
+            key = p.stem   # <-- THIS IS THE ONLY KEY
 
             lookup[key] = p
 
-        pane_maps.append(lookup)
+        maps.append(lookup)
+
+        print(f"[INFO] loaded {len(lookup)} files")
 
     # --------------------------------------------------
-    # find common keys
+    # STEP 2: find common filenames
     # --------------------------------------------------
 
-    common_keys = set(
-        pane_maps[0].keys()
-    )
+    common_keys = set(maps[0].keys())
 
-    for lookup in pane_maps[1:]:
-        common_keys &= set(
-            lookup.keys()
-        )
+    for m in maps[1:]:
+        common_keys &= set(m.keys())
 
-    common_keys = sorted(
-        common_keys
-    )
+    common_keys = sorted(common_keys)
 
-    print(
-        f"Found {len(common_keys)} matching pane groups"
-    )
+    print(f"\nFound {len(common_keys)} matching groups")
+
+    if not common_keys:
+        print("[WARNING] No overlapping filenames")
+        return []
 
     # --------------------------------------------------
-    # glue
+    # STEP 3: stitch
     # --------------------------------------------------
 
-    output_paths = []
+    outputs = []
 
     for key in common_keys:
 
         images = []
 
-        for lookup in pane_maps:
+        for m in maps:
+            img = load_image(m[key])
+            images.append(img)
 
-            img = Image.open(lookup[key])
-
-            arr = np.array(img)
-
-            # ---------------------------
-            # FIX SHAPE ISSUES
-            # ---------------------------
-            arr = np.squeeze(arr)
-
-            # if weird higher-D arrays sneak in
-            if arr.ndim > 3:
-                arr = arr.reshape(arr.shape[-2], arr.shape[-1])
-
-            # force RGB
-            if arr.ndim == 2:
-                arr = np.stack([arr]*3, axis=-1)
-            elif arr.ndim == 3 and arr.shape[2] > 3:
-                arr = arr[:, :, :3]
-
-            # ---------------------------
-            # FIX INTENSITY (prevents black TIFFs)
-            # ---------------------------
-            arr = arr.astype(np.float32)
-            arr = arr - arr.min()
-
-            if arr.max() > 0:
-                arr = arr / arr.max()
-
-            arr = (arr * 255).astype(np.uint8)
-
-            images.append(arr)
-
-        heights = [
-            img.shape[0]
-            for img in images
-        ]
-
-        target_height = min(
-            heights
-        )
+        # normalize height
+        target_height = min(img.shape[0] for img in images)
 
         resized = []
 
@@ -138,44 +99,17 @@ def glue_multiple_pane_sets(
             pil = Image.fromarray(img)
 
             if pil.height != target_height:
+                new_width = int(pil.width * target_height / pil.height)
+                pil = pil.resize((new_width, target_height), Image.NEAREST)
 
-                new_width = int(
-                    pil.width *
-                    target_height /
-                    pil.height
-                )
+            resized.append(np.array(pil))
 
-                pil = pil.resize(
-                    (
-                        new_width,
-                        target_height
-                    ),
-                    Image.NEAREST
-                )
+        combined = np.concatenate(resized, axis=1)
 
-            resized.append(
-                np.array(pil)
-            )
+        out_path = output_folder / f"{key}.png"
 
-        combined = np.concatenate(
-            resized,
-            axis=1
-        )
+        Image.fromarray(combined.astype(np.uint8)).save(out_path)
 
-        start_run, end_run = key
+        outputs.append(out_path)
 
-        out_path = (
-            output_folder /
-            f"HUD_{start_run}_{end_run}.png"
-        )
-
-        Image.fromarray(
-            combined.astype(np.uint8)
-        ).save(out_path)
-
-        output_paths.append(
-            out_path
-        )
-
-    return output_paths
- 
+    return outputs
