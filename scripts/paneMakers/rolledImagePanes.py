@@ -470,7 +470,9 @@ def batch_process_images_into_rolls(master_image_source, run_number_range, maste
 
 
         #def process_runs_rolling_global(master_image_source, file_destination, run_numbers, open_beam, window_size, image_duration, duration_percentage_filter = 20):
-        newImages = process_runs_rolling_global(master_image_source, master_file_destination / (str(rollLength) + "rolls/"), runs_which_have_not_been_processed_yet, ob_path / ( str(rollLength) + "min_ob.tif" ),  window_size, scanLen_min*60, energyLabels = [560, 830] , duration_percentage_filter = 20)
+        newImages = []
+        if runs_which_have_not_been_processed_yet != []:
+            newImages = process_runs_rolling_global(master_image_source, master_file_destination / (str(rollLength) + "rolls/"), runs_which_have_not_been_processed_yet, ob_path / ( str(rollLength) + "min_ob.tif" ),  window_size, scanLen_min*60, energyLabels = [560, 830] , duration_percentage_filter = 20)
         tifPaths = []
         for tif in pre_existing_images:
             print(tif)

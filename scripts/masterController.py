@@ -11,20 +11,23 @@ from PIL import Image
 import populateHDFSpreadSheet
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
+NEXUS = "/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
+
+
 MASTER_IMAGE_SOURCE = Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/") #The IPTS folder that contains all data
 ENERGY_FRAME_MIN = 560# The specific images per run, correspond to ToF Energy
 ENERGY_FRAME_MAX = 830
 
 
 
-STARTING_RUN_NUMBER = 23417# THe run number to be analyzed
-ENDING_RUN_NUMBER = 23535
+STARTING_RUN_NUMBER = 23139# THe run number to be analyzed
+ENDING_RUN_NUMBER = 23373
 RUN_NUMBERS = list(range(STARTING_RUN_NUMBER, ENDING_RUN_NUMBER + 1))
 
 EXPECTED_IMAGE_DURATION = 5 #How long one frame was collected for, not the total length of the rolled frames
-ROLL_LENGTH_IN_MIN = [30] # how long the total roll is, should be a multiple of EXPECTED_IMAGE_DURATION
+ROLL_LENGTH_IN_MIN = [5] # how long the total roll is, should be a multiple of EXPECTED_IMAGE_DURATION
 
-MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest/") #Where are these files will go
+MASTER_DESTINATION = Path("/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/HUDtest_SampleD/") #Where are these files will go
 OB_PATH = Path(
 	"/SNS/VENUS/IPTS-36967/shared/Batch_analysis_6-12-25/June/OBs/")# the ob for the whole roll, make sure hte length is right
 
@@ -63,7 +66,7 @@ def main():
         #path to tif folder 
         
         #update HDF spreadshet
-        csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE)
+        csvPath = populateHDFSpreadSheet.update_HDF_sheet(MASTER_DESTINATION / "HDFSpreadsheet", MASTER_IMAGE_SOURCE, NEXUS)
         # createPanes of data analysis
         panes = prepare_image_panes(tifFolder,tifFolder, csvPath, roi)
         panes.append(auto_balance_images)
