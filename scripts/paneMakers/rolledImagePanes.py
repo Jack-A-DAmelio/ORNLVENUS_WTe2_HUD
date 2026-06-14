@@ -409,7 +409,7 @@ def batch_process_images_into_rolls(master_image_source, run_number_range, maste
     for rollLength in roll_lengths:
 
         window_size = rollLength / scanLen_min
-        if window_size % 1 != 0:
+        if window_size % 1 != 0 or scanLen_min > roll_length:
             print ("Error: Cannot make ", rollLength, " min rolls with ", scanLen_min, " min scans")
         else:
             print("Rolling ", window_size, "scans together")
