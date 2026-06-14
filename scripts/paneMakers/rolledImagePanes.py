@@ -68,8 +68,7 @@ def load_image(path, badfilelog):
 # ==========================================================
 # OPTIONAL: HDF Loader
 # ==========================================================
-def get_HDF_for_single_run(Run_num):
-	nexusLocation= "/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
+def get_HDF_for_single_run(Run_num, nexusLocation):
 
 	hdf5_input = nexusLocation + "VENUS_" + str(Run_num) + ".nxs.h5"
 	return hdf5_input
@@ -216,7 +215,7 @@ def discover_all_runs(MASTER_SOURCE, run_min, run_max):
 	return run_map
 
 
-def process_runs_rolling_global(master_image_source, file_destination, run_numbers, open_beam, window_size, image_duration, energyLabels = [560, 830] ,duration_percentage_filter = 20):
+def process_runs_rolling_global(master_image_source, file_destination, run_numbers, open_beam, window_size, image_duration, nexus, energyLabels = [560, 830] ,duration_percentage_filter = 20):
 	print("Beginning Rolling in range", run_numbers)
 	out_dir = file_destination
 	out_dir.mkdir(parents=True, exist_ok=True)
@@ -254,7 +253,7 @@ def process_runs_rolling_global(master_image_source, file_destination, run_numbe
 		
 		rangeContainsBadFrames = False #will control if we do compute a roll, based on if the duration is too short (aborted run)  or too long (beam down)
 		for run_id, folder, in window_runs:
-			hdf5_data = get_HDF_for_single_run(run_id)
+			hdf5_data = get_HDF_for_single_run(run_id, nexus)
 			duration = get_HDF_duration(hdf5_data)
 			if duration > image_duration* (1 + (0.01*duration_percentage_filter)) or duration < image_duration * (1 - (0.01*duration_percentage_filter)):
 				rangeContainsBadFrames = True
@@ -401,7 +400,7 @@ def grey_balance(arr, low=1, high=99):
 
         
         return np.clip(arr, 0, 1)
-def batch_process_images_into_rolls(master_image_source, run_number_range, master_file_destination, scanLen_min, ob_path, roll_length): #will perform a series of data processing steps, and then caclulate plots to make composite image
+def batch_process_images_into_rolls(master_image_source, run_number_range, master_file_destination, scanLen_min, nexus, ob_path, roll_length): #will perform a series of data processing steps, and then caclulate plots to make composite image
     
     #Creation of simple division normalized images, some of which will be summed ("Rolled") for higher contrast
     #choose roll lengths
@@ -472,7 +471,7 @@ def batch_process_images_into_rolls(master_image_source, run_number_range, maste
         #def process_runs_rolling_global(master_image_source, file_destination, run_numbers, open_beam, window_size, image_duration, duration_percentage_filter = 20):
         newImages = []
         if runs_which_have_not_been_processed_yet != []:
-            newImages = process_runs_rolling_global(master_image_source, master_file_destination / (str(rollLength) + "rolls/"), runs_which_have_not_been_processed_yet, ob_path / ( str(rollLength) + "min_ob.tif" ),  window_size, scanLen_min*60, energyLabels = [560, 830] , duration_percentage_filter = 20)
+            newImages = process_runs_rolling_global(master_image_source, master_file_destination / (str(rollLength) + "rolls/"), runs_which_have_not_been_processed_yet, ob_path / ( str(rollLength) + "min_ob.tif" ),  window_size, scanLen_min*60, nexus, energyLabels = [560, 830] , duration_percentage_filter = 20)
         tifPaths = []
         for tif in pre_existing_images:
             print(tif)

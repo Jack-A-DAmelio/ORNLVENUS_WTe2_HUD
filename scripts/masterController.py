@@ -33,8 +33,8 @@ OB_PATH = Path(
 
 def prepare_image_panes(tif_folder, destination, csv, roi = False):
 
-    temperaturePane = True
-    averageGreyscalePane = True
+    temperaturePane = False
+    averageGreyscalePane = False
     greyScaleHistogram = True
 
     
@@ -47,7 +47,7 @@ def prepare_image_panes(tif_folder, destination, csv, roi = False):
     greyScaleHistogramPanes = []
     if greyScaleHistogram:
         greyScaleHistogramPanes = paneMakers.greyScaleHistogramPane.create_roi_panes(tif_folder, destination / "histogramPanes", roi)
-
+    print(greyScaleHistogramPanes)
     return [temperaturePanels, averageGreyscalePanes,greyScaleHistogramPanes]
 
 
@@ -59,7 +59,7 @@ def main():
     for roll in ROLL_LENGTH_IN_MIN:
 
         #Make the tif files, avoiding making already made data
-        tifPaths, auto_balance_images = paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, ob_path = OB_PATH, roll_length = roll)
+        tifPaths, auto_balance_images = paneMakers.rolledImagePanes.batch_process_images_into_rolls(master_image_source = MASTER_IMAGE_SOURCE, run_number_range = RUN_NUMBERS, master_file_destination = MASTER_DESTINATION, scanLen_min = EXPECTED_IMAGE_DURATION, nexus=NEXUS, ob_path = OB_PATH, roll_length = roll)
         tifFolder = MASTER_DESTINATION / (str(roll) +"rolls")
         if roi == False:#Only make the ROI once for whole batch
             roi = paneMakers.roi_selector.select_roi(tifFolder)

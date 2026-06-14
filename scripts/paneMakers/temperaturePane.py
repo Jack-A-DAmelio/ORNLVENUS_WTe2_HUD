@@ -186,7 +186,7 @@ def prepare_temperaturePane(tif_folder, csv_file, output_folder, N=20):
     global_temp_min = float(df["AvgT"].min())
     global_temp_max = float(df["AvgT"].max())
 
-    pad = 0.05 * (global_temp_max - global_temp_min)
+    pad = 100
 
     global_temp_min -= pad
     global_temp_max += pad
