@@ -2,6 +2,7 @@ from pathlib import Path
 import re
 import numpy as np
 from PIL import Image
+import math
 
 
 # ==========================================================
@@ -9,25 +10,8 @@ from PIL import Image
 # ==========================================================
 
 def normalize_key(path):
-    """
-    Convert filenames like:
-
-        GlobalRunWindow_23139_23139.tif
-        GaussianFitComparison_GlobalRunWindow_23139_23139.png
-        TemperaturePane_23139_23139.png
-
-    into:
-
-        23139_23139
-
-    so files can be matched regardless of:
-        - extension
-        - folder
-        - prefixes
-    """
 
     name = Path(path).stem
-
     match = re.search(r"(\d+_\d+)$", name)
 
     if match:
@@ -41,15 +25,9 @@ def normalize_key(path):
 # ==========================================================
 
 def load_image(path):
-    """
-    Load image and convert to uint8 RGB.
-    Handles TIFF, PNG, grayscale, RGB, RGBA.
-    """
 
     img = Image.open(path)
-
     arr = np.array(img)
-
     arr = np.squeeze(arr)
 
     # grayscale -> RGB
@@ -61,7 +39,6 @@ def load_image(path):
         arr = arr[:, :, :3]
 
     arr = arr.astype(np.float32)
-
     arr -= arr.min()
 
     if arr.max() > 0:
@@ -76,42 +53,13 @@ def load_image(path):
 # GLUE FUNCTION
 # ==========================================================
 
-def glue_multiple_pane_sets(
-    pane_lists,
-    output_folder
-):
-    """
-    pane_lists should look like:
-
-    [
-        [temp1.png, temp2.png, temp3.png],
-        [avg1.png, avg2.png, avg3.png],
-        [hist1.png, hist2.png, hist3.png],
-        [img1.tif, img2.tif, img3.tif]
-    ]
-
-    Matching is based ONLY on the run-number portion
-    of the filename.
-
-    Example:
-
-        GlobalRunWindow_23139_23139.tif
-        GaussianFitComparison_GlobalRunWindow_23139_23139.png
-
-    both map to:
-
-        23139_23139
-    """
+def glue_multiple_pane_sets(pane_lists, output_folder):
 
     output_folder = Path(output_folder)
-
-    output_folder.mkdir(
-        parents=True,
-        exist_ok=True
-    )
+    output_folder.mkdir(parents=True, exist_ok=True)
 
     # --------------------------------------------------
-    # STEP 1: BUILD LOOKUPS
+    # BUILD LOOKUPS
     # --------------------------------------------------
 
     maps = []
@@ -123,7 +71,6 @@ def glue_multiple_pane_sets(
         for p in pane_list:
 
             p = Path(p)
-
             key = normalize_key(p)
 
             if key is None:
@@ -134,35 +81,13 @@ def glue_multiple_pane_sets(
 
         maps.append(lookup)
 
-        print(
-            f"[INFO] Pane set {set_index}: "
-            f"{len(lookup)} files"
-        )
+        print(f"[INFO] Pane set {set_index}: {len(lookup)} files")
 
-        # helpful debugging
         if len(lookup):
-            print(
-                "       Example:",
-                next(iter(lookup.values()))
-            )
+            print("       Example:", next(iter(lookup.values())))
 
     # --------------------------------------------------
-    # STEP 2: DEBUG PRINT KEYS
-    # --------------------------------------------------
-
-    print("\n===== KEYS BY DATASET =====")
-
-    for i, m in enumerate(maps):
-
-        print(f"\nSET {i}")
-
-        for key in sorted(m.keys())[:5]:
-            print("   ", key)
-
-    print("\n===========================\n")
-
-    # --------------------------------------------------
-    # STEP 3: FIND COMMON KEYS
+    # COMMON KEYS
     # --------------------------------------------------
 
     if len(maps) == 0:
@@ -176,20 +101,14 @@ def glue_multiple_pane_sets(
 
     common_keys = sorted(common_keys)
 
-    print(
-        f"Found {len(common_keys)} matching groups"
-    )
+    print(f"Found {len(common_keys)} matching groups")
 
     if len(common_keys) == 0:
-
-        print(
-            "[WARNING] No overlapping filenames"
-        )
-
+        print("[WARNING] No overlapping filenames")
         return []
 
     # --------------------------------------------------
-    # STEP 4: STITCH PANELS
+    # PROCESS EACH KEY
     # --------------------------------------------------
 
     outputs = []
@@ -199,21 +118,13 @@ def glue_multiple_pane_sets(
         images = []
 
         for lookup in maps:
-
-            img = load_image(
-                lookup[key]
-            )
-
-            images.append(img)
+            images.append(load_image(lookup[key]))
 
         # --------------------------------------------------
-        # MATCH HEIGHTS
+        # GLOBAL HEIGHT NORMALIZATION
         # --------------------------------------------------
 
-        target_height = min(
-            img.shape[0]
-            for img in images
-        )
+        target_height = min(img.shape[0] for img in images)
 
         resized = []
 
@@ -223,54 +134,99 @@ def glue_multiple_pane_sets(
 
             if pil.height != target_height:
 
-                new_width = int(
-                    pil.width *
-                    target_height /
-                    pil.height
-                )
+                new_width = int(pil.width * target_height / pil.height)
+                pil = pil.resize((new_width, target_height), Image.NEAREST)
 
-                pil = pil.resize(
-                    (
-                        new_width,
-                        target_height
-                    ),
-                    Image.NEAREST
-                )
-
-            resized.append(
-                np.array(pil)
-            )
+            resized.append(np.array(pil))
 
         # --------------------------------------------------
-        # CONCATENATE
+        # GRID SHAPE (ROWS/COLS)
         # --------------------------------------------------
 
-        combined = np.concatenate(
-            resized,
-            axis=1
-        )
+        n = len(resized)
+
+        if n <= 2:
+            rows = 1
+        elif n <= 4:
+            rows = 2
+        else:
+            rows = 3
+
+        cols = math.ceil(n / rows)
+
+        # pad to full grid
+        h, w = resized[0].shape[:2]
+        blank = np.zeros((h, w, 3), dtype=np.uint8)
+
+        while len(resized) < rows * cols:
+            resized.append(blank)
+
+        # --------------------------------------------------
+        # BUILD GRID ROWS
+        # --------------------------------------------------
+
+        grid_rows = []
+        row_widths = []
+
+        for r in range(rows):
+
+            row_imgs = resized[r * cols:(r + 1) * cols]
+
+            row_h = min(img.shape[0] for img in row_imgs)
+
+            fixed_row = []
+
+            for img in row_imgs:
+
+                pil = Image.fromarray(img)
+
+                if pil.height != row_h:
+                    new_w = int(pil.width * row_h / pil.height)
+                    pil = pil.resize((new_w, row_h), Image.NEAREST)
+
+                fixed_row.append(np.array(pil))
+
+            row = np.concatenate(fixed_row, axis=1)
+            grid_rows.append(row)
+            row_widths.append(row.shape[1])
+
+        # --------------------------------------------------
+        # PAD ROWS TO SAME WIDTH (CRITICAL FIX)
+        # --------------------------------------------------
+
+        max_width = max(row_widths)
+        h = grid_rows[0].shape[0]
+
+        padded_rows = []
+
+        for row in grid_rows:
+
+            if row.shape[1] < max_width:
+
+                pad = np.zeros(
+                    (h, max_width - row.shape[1], 3),
+                    dtype=np.uint8
+                )
+
+                row = np.concatenate([row, pad], axis=1)
+
+            padded_rows.append(row)
+
+        # FINAL COMBINE
+        combined = np.concatenate(padded_rows, axis=0)
 
         # --------------------------------------------------
         # SAVE
         # --------------------------------------------------
 
-        out_path = (
-            output_folder /
-            f"HUD_{key}.png"
-        )
+        out_path = output_folder / f"HUD_{key}.png"
 
-        Image.fromarray(
-            combined.astype(np.uint8)
-        ).save(out_path)
+        Image.fromarray(combined.astype(np.uint8)).save(out_path)
 
         outputs.append(out_path)
 
-        print(
-            f"[SAVED] {out_path.name}"
-        )
+        print(f"[SAVED] {out_path.name}")
 
-    print(
-        f"\nCreated {len(outputs)} HUD images"
-    )
+    print(f"\nCreated {len(outputs)} HUD images")
 
     return outputs

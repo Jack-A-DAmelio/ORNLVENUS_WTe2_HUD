@@ -6,6 +6,73 @@ import populateHDFSpreadSheet
 import matplotlib.pyplot as plt
 from matplotlib.widgets import RectangleSelector
 
+
+
+
+from pathlib import Path
+import numpy as np
+from PIL import Image, ImageDraw
+import json
+
+# ==========================================================
+# APPLY ROI TO ALL TIFFS
+# ==========================================================
+
+from pathlib import Path
+from PIL import Image, ImageDraw
+import json
+
+# ==========================================================
+# APPLY ROI TO TIFF LIST
+# ==========================================================
+from pathlib import Path
+from PIL import Image, ImageDraw
+import json
+
+# ==========================================================
+# APPLY ROI TO TIFF LIST (OVERWRITE ORIGINALS)
+# ==========================================================
+
+def apply_roi_to_tiffs(tiff_paths, roi_box, roi_json_path=None):
+
+    x_min, x_max, y_min, y_max = roi_box
+
+    roi_meta = {
+        "roi_box": {
+            "x_min": x_min,
+            "x_max": x_max,
+            "y_min": y_min,
+            "y_max": y_max
+        },
+        "files": []
+    }
+
+    for tif_path in tiff_paths:
+
+        tif_path = Path(tif_path)
+
+        img = Image.open(tif_path).convert("RGB")
+        draw = ImageDraw.Draw(img)
+
+        draw.rectangle(
+            [(x_min, y_min), (x_max, y_max)],
+            outline=(0, 255, 0),
+            width=3
+        )
+
+        img.save(tif_path)
+
+        roi_meta["files"].append(str(tif_path))
+
+    if roi_json_path is not None:
+
+        roi_json_path = Path(roi_json_path)
+
+        with open(roi_json_path, "w") as f:
+            json.dump(roi_meta, f, indent=4)
+
+    return roi_meta
+
 # ==========================================================
 # ROI SELECTION
 # ==========================================================

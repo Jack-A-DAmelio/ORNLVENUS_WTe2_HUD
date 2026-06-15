@@ -41,11 +41,12 @@ def main():
       #tifPaths,auto_balance = controllerMethods.load_existing_roll_outputs(tifFolder)
          # output folder for this roll group
     tifFolder= MASTER_DESTINATION / (str(roll)+"rolls/")
+    
     print(tifFolder)
 
     if roi==False:
         roi=paneMakers.roi_selector.select_roi(tifFolder)  # user selects ROI once per batch
-
+    paneMakers.roi_selector.apply_roi_to_tiffs(auto_balance, roi)
     csvPath=populateHDFSpreadSheet.update_HDF_sheet(
             tifFolder/"HDFSpreadsheet",
             MASTER_IMAGE_SOURCE,
