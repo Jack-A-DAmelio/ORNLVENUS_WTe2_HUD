@@ -18,9 +18,9 @@ def load_existing_roll_outputs(roll_folder):
     return tif_paths,auto_paths
 
 def prepare_image_panes(tif_folder,destination,csv,roi=False):
-    make_temperature_pane=False
-    make_average_greyscale_pane=False
-    make_histogram_pane=True
+    make_temperature_pane= True
+    make_average_greyscale_pane=True
+    make_histogram_pane= True
 
     panes=[]  # store all generated pane sets
 

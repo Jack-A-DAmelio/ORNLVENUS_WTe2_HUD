@@ -5,14 +5,17 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 from matplotlib.widgets import RectangleSelector
 from matplotlib.patches import Circle
+from scipy.optimize import curve_fit
 
 
 # ==========================================================
 # SETTINGS
 # ==========================================================
 
-REMOVE_SPECIAL = True   # remove exact 0 and 1 pixels if needed
-BINS = 100              # histogram resolution
+REMOVE_SPECIAL = True
+BINS = 100
+
+Y_MAX = None  # will auto-compute if None
 
 
 # ==========================================================
@@ -20,24 +23,19 @@ BINS = 100              # histogram resolution
 # ==========================================================
 
 def load_image(p):
-    """Load TIFF image as numpy array."""
     return tifffile.imread(p)
 
 
 def extract_run_number(f):
-    """Extract run identifier from filename (optional utility)."""
     m = re.search(r"_(\d+_\d+)", f)
-    if m:
-        return m.group(1)
-    return f.stem
+    return m.group(1) if m else f.stem
 
 
 # ==========================================================
-# ROI SELECTION
+# ROI
 # ==========================================================
 
 def normalize_roi(roi):
-    """Ensure ROI is always dict format."""
     if isinstance(roi, dict):
         return roi
     x1, x2, y1, y2 = roi
@@ -45,20 +43,15 @@ def normalize_roi(roi):
 
 
 def select_roi(img):
-    """
-    Interactive ROI selection using matplotlib rectangle selector.
-    Returns bounding box dictionary.
-    """
     roi = {}
 
     fig, ax = plt.subplots(figsize=(8, 8))
     ax.imshow(img, cmap="gray")
-    ax.set_title("Select ROI then close window")
+    ax.set_title("Select ROI then close")
 
     def on_select(e1, e2):
         x1, y1 = int(e1.xdata), int(e1.ydata)
         x2, y2 = int(e2.xdata), int(e2.ydata)
-
         roi["x1"], roi["x2"] = min(x1, x2), max(x1, x2)
         roi["y1"], roi["y2"] = min(y1, y2), max(y1, y2)
 
@@ -72,111 +65,124 @@ def select_roi(img):
 
 
 # ==========================================================
-# IMAGE PROCESSING
+# IMAGE OPS
 # ==========================================================
 
 def crop_image(img, roi):
-    """Crop image to ROI."""
     roi = normalize_roi(roi)
     return img[roi["y1"]:roi["y2"], roi["x1"]:roi["x2"]]
 
 
 def normalize_image(img):
-    """
-    Normalize image intensities to [0, 1] using min-max scaling.
-    This ensures all histograms are comparable in range.
-    """
     img = img.astype(np.float32)
-
-    mn = np.nanmin(img)
-    mx = np.nanmax(img)
-
-    # avoid divide-by-zero if flat image
+    mn, mx = np.nanmin(img), np.nanmax(img)
     if mx - mn == 0:
-        return np.zeros_like(img, dtype=np.float32)
-
+        return np.zeros_like(img)
     return (img - mn) / (mx - mn)
 
 
 def build_histogram(img, bins):
-    """
-    Build histogram of pixel intensities in [0, 1].
-    """
     px = img.ravel()
     px = px[np.isfinite(px)]
 
-    # optionally remove extreme artifacts
     if REMOVE_SPECIAL:
         px = px[(px != 0.0) & (px != 1.0)]
 
-    h, edges = np.histogram(px, bins=bins, range=(0.0, 1.0))
-    centers = (edges[:-1] + edges[1:]) / 2
-
-    return centers, h
-
-
-# ==========================================================
-# CSV OUTPUT
-# ==========================================================
-
-def init_csv(out):
-    """Create output CSV if it doesn't exist."""
-    out = Path(out)
-    out.mkdir(parents=True, exist_ok=True)
-
-    csv_path = out / "parameters.csv"
-
-    if not csv_path.exists():
-        with open(csv_path, "w", newline="") as f:
-            csv.writer(f).writerow(["tiff", "run", "roi"])
-
-    return csv_path
-
-
-def append_csv(csv_path, tiff, run, roi):
-    """Append one processed entry."""
-    row = [str(tiff), run, json.dumps(roi)]
-
-    with open(csv_path, "a", newline="") as f:
-        csv.writer(f).writerow(row)
+    h, edges = np.histogram(px, bins=bins, range=(0, 1))
+    g = (edges[:-1] + edges[1:]) / 2
+    return g, h
 
 
 # ==========================================================
-# PLOTTING
+# GAUSSIAN MODEL + WEIGHTED FIT
 # ==========================================================
 
-def plot_histogram(x, h, out, run, show=False):
-    """
-    Plot normalized histogram.
-    """
+def gaussian(x, a, mu, sigma):
+    return a * np.exp(-(x - mu)**2 / (2 * sigma**2))
+
+
+def weighted_residual(params, x, y):
+    a, mu, sigma = params
+    model = gaussian(x, a, mu, sigma)
+
+    # weighting centered on mu
+    w = np.exp(-(x - mu)**2 / (2 * (0.1**2)))
+
+    return w * (model - y)
+
+
+def fit_gaussian(g, h):
+
+    if len(h) == 0 or np.sum(h) == 0:
+        return None
+
+    # ---- initial guess from histogram peak
+    peak_idx = np.argmax(h)
+    mu0 = g[peak_idx]
+    a0 = h[peak_idx]
+    sigma0 = 0.1
+
+    p0 = [a0, mu0, sigma0]
+
+    try:
+        popt, _ = curve_fit(
+            gaussian,
+            g,
+            h,
+            p0=p0,
+            maxfev=10000
+        )
+        return popt
+    except RuntimeError:
+        return None
+
+
+# ==========================================================
+# PLOT
+# ==========================================================
+
+def plot_histogram(g, h, fit_params, out, run, show=False):
+
+    global Y_MAX
+    if Y_MAX is None:
+        Y_MAX = max(Y_MAX or 0, np.max(h))
 
     fig, ax = plt.subplots(figsize=(8, 6))
 
-    # main histogram
-    ax.plot(x, h, color="black", label="Histogram")
+    ax.plot(g, h, color="black", label="Histogram")
 
-    # reference guides
+    # ---- fit overlay
+    if fit_params is not None:
+        a, mu, sigma = fit_params
+        ax.plot(g, gaussian(g, *fit_params), color="red", label="Gaussian fit")
+
+        ax.text(
+            0.02, 0.95,
+            f"μ = {mu:.4f}\nσ = {sigma:.4f}",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="white", edgecolor="black", alpha=0.8)
+        )
+    else:
+        ax.text(
+            0.02, 0.95,
+            "Fit failed",
+            transform=ax.transAxes,
+            va="top",
+            bbox=dict(facecolor="orange", edgecolor="black", alpha=0.8)
+        )
+
+    # ---- axis constraints
     ax.set_xlim(0, 1)
+    ax.set_ylim(0, Y_MAX * 1.05)
+
     for v in [0.25, 0.5, 0.75]:
         ax.axvline(v, color="gray", linestyle="--", linewidth=1)
 
-    # styling
-    ax.set_xlabel("Normalized intensity (0 → 1)")
-    ax.set_ylabel("Pixel count")
+    ax.set_xlabel("Normalized intensity (0–1)")
+    ax.set_ylabel("Counts (fixed scale)")
     ax.set_title(run)
-
     ax.legend()
-
-    # small visual markers (kept from your original style)
-    ax.add_patch(Circle((0.05, 0.05), 0.03,
-                        transform=ax.transAxes,
-                        facecolor="black"))
-
-    ax.add_patch(Circle((0.95, 0.05), 0.03,
-                        transform=ax.transAxes,
-                        facecolor="white",
-                        edgecolor="black",
-                        linewidth=1))
 
     plt.tight_layout()
 
@@ -190,19 +196,10 @@ def plot_histogram(x, h, out, run, show=False):
 
 
 # ==========================================================
-# MAIN PIPELINE
+# PIPELINE
 # ==========================================================
 
 def create_roi_panes(folder, dest, roi, bins=100, show=False, remove_special_pixels=True):
-    """
-    Full processing pipeline:
-    - load TIFFs
-    - crop ROI
-    - normalize (0–1)
-    - compute histogram
-    - plot + save
-    - log CSV
-    """
 
     global REMOVE_SPECIAL
     REMOVE_SPECIAL = remove_special_pixels
@@ -215,31 +212,35 @@ def create_roi_panes(folder, dest, roi, bins=100, show=False, remove_special_pix
     if not files:
         raise ValueError("No TIFF files found")
 
-    csv_path = init_csv(dest)
+    csv_path = dest / "parameters.csv"
+
+    with open(csv_path, "w", newline="") as f:
+        csv.writer(f).writerow(["tiff", "run", "roi", "mu", "sigma", "amp"])
+
     outputs = []
 
-    for i, f in enumerate(files):
+    for f in files:
 
-        # ---- load image
         img = load_image(f)
-
-        # ---- crop ROI
         crop = crop_image(img, roi)
-
-        # ---- normalize to 0–1 (IMPORTANT STEP)
         crop = normalize_image(crop)
 
-        # ---- histogram
-        x, h = build_histogram(crop, bins)
+        g, h = build_histogram(crop, bins)
+        fit = fit_gaussian(g, h)
 
-        # ---- run label
         run = f.stem
 
-        # ---- plot result
-        plot_histogram(x, h, dest, run, show=show)
+        plot_histogram(g, h, fit, dest, run, show=show)
 
-        # ---- save metadata
-        append_csv(csv_path, f, run, roi)
+        # log
+        if fit is None:
+            row = [str(f), run, json.dumps(roi), np.nan, np.nan, np.nan]
+        else:
+            a, mu, sigma = fit
+            row = [str(f), run, json.dumps(roi), mu, sigma, a]
+
+        with open(csv_path, "a", newline="") as fcsv:
+            csv.writer(fcsv).writerow(row)
 
         outputs.append(dest / f"Hist_{run}.png")
 

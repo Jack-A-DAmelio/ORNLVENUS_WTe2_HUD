@@ -14,8 +14,8 @@ import re,numpy as np,matplotlib.pyplot as plt
 from PIL import Image
 import populateHDFSpreadSheet
 from matplotlib.widgets import RectangleSelector
-
-NEXUS="/SNS/users/damelio2/data/SNS/VENUS/IPTS-36967/nexus/"
+#USERINPUTS
+NEXUS="/SNS/users/lfigari/data/SNS/VENUS/IPTS-36967/nexus/"
 
 MASTER_IMAGE_SOURCE=Path("/SNS/VENUS/IPTS-36967/shared/autoreduce/images/tpx1/raw/radiography/")
 ENERGY_FRAME_MIN=560  # lower TOF energy window bound
