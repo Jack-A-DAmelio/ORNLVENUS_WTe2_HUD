@@ -5,33 +5,10 @@ from pathlib import Path
 from PIL import Image
 
 # ==========================================================
-# CONFIG
+# RUN RANGE PARSING
 # ==========================================================
-
-N = 10
-
-# ==========================================================
-# UTILITIES
-# ==========================================================
-
-def clean_time_column(time_list):
-
-    cleaned = []
-
-    for t in time_list:
-        if isinstance(t, (list, tuple, np.ndarray)):
-            t = t[0]
-        if isinstance(t, (bytes, bytearray)):
-            t = t.decode("utf-8")
-
-        t = str(t).replace("[", "").replace("]", "").replace("b'", "").replace("'", "")
-        cleaned.append(t)
-
-    return pd.to_datetime(cleaned)
-
 
 def parse_run_range(filename):
-
     name = filename.replace(".tif", "")
     parts = name.split("_")
 
@@ -43,93 +20,80 @@ def parse_run_range(filename):
         return []
 
 # ==========================================================
+# BUILD RUN INDEX MAPPING (CORE FIX)
+# ==========================================================
+
+def build_run_index(df):
+    run_list = sorted(df["RunNum"].unique())
+    run_to_idx = {r: i for i, r in enumerate(run_list)}
+    return run_list, run_to_idx
+
+# ==========================================================
 # TEMPERATURE CONTEXT
 # ==========================================================
 
-def get_temperature_context(run_range, N,
+def get_temperature_context(run_range,
                             run_to_avgT,
-                            run_to_start,
-                            run_list,
                             run_to_idx):
 
-    window_T, window_time = [], []
+    window_idx = []
+    window_T = []
 
     for r in run_range:
-        if r in run_to_avgT and r in run_to_start:
+        if r in run_to_avgT and r in run_to_idx:
+            window_idx.append(run_to_idx[r])
             window_T.append(run_to_avgT[r])
-            window_time.append(run_to_start[r])
 
-    if len(window_T) == 0:
+    if len(window_idx) == 0:
         return None
 
-    indices = [run_to_idx[r] for r in run_range if r in run_to_idx]
-
-    if len(indices) == 0:
-        return None
-
-    left = max(min(indices) - N, 0)
-    right = min(max(indices) + N, len(run_list) - 1)
-
-    context_T, context_time = [], []
-
-    for i in range(left, right + 1):
-        r = run_list[i]
-        if r in run_to_avgT and r in run_to_start:
-            context_T.append(run_to_avgT[r])
-            context_time.append(run_to_start[r])
+    window_idx = np.array(window_idx)
+    window_T = np.array(window_T)
 
     return {
-        "window_time": window_time,
-        "window_T": window_T,
-        "context_time": context_time,
-        "context_T": context_T
+        "window_idx": window_idx,
+        "window_T": window_T
     }
 
 # ==========================================================
-# PLOT (UNCHANGED STYLE)
+# PANEL RENDERING
+# ==========================================================
+
 def make_temperature_panel(data,
-                           y_min,
-                           y_max):
+                           full_T_series,
+                           window_mask,
+                           y_min=0,
+                           y_max=1200):
 
-    window_time = np.array(clean_time_column(data["window_time"]))
-    context_time = np.array(clean_time_column(data["context_time"]))
-
-    window_T = np.array(data["window_T"])
-    context_T = np.array(data["context_T"])
-
-    order = np.argsort(window_time)
-
-    window_time = window_time[order]
-    window_T = window_T[order]
-
-    avg_T = float(np.mean(window_T))
+    x = np.arange(len(full_T_series))
+    y = np.array(full_T_series, dtype=float)
 
     fig, ax = plt.subplots(figsize=(5.12, 5.12), dpi=100)
 
-    ax.plot(
-        context_time,
-        context_T,
-        color="gray",
-        alpha=0.3
+    # full temperature trace
+    ax.plot(x, y, color="black", linewidth=1)
+
+    # window highlight (orange bar)
+    ax.fill_between(
+        x,
+        y_min,
+        y_max,
+        where=window_mask,
+        color="orange",
+        alpha=0.25
     )
 
-    ax.plot(
-        window_time,
-        window_T,
-        color="orange",
-        linewidth=2.5
-    )
+    # overlay window points
+    win_x = x[window_mask]
+    win_y = y[window_mask]
 
-    ax.axvspan(
-        window_time.min(),
-        window_time.max(),
-        color="orange",
-        alpha=0.15
-    )
+    if len(win_x) > 0:
+        ax.plot(win_x, win_y, color="orange", linewidth=2.5)
+
+    avg_T = float(np.mean(win_y)) if len(win_y) else np.nan
 
     ax.text(
-        0.02,
-        0.95,
+        0.02, 0.95,
         f"Avg T: {avg_T:.2f} °C",
         transform=ax.transAxes,
         bbox=dict(facecolor="white", alpha=0.7),
@@ -137,32 +101,42 @@ def make_temperature_panel(data,
         va="top"
     )
 
-    # FIXED SCALE FOR ENTIRE DATASET
+    # ======================================================
+    # FIXED AXES (YOUR REQUIREMENT)
+    # ======================================================
+
+    ax.set_xlim(0, len(full_T_series))
     ax.set_ylim(y_min, y_max)
 
-    ax.set_xticks([])
-    ax.set_ylabel("T")
+    ax.set_xlabel("Run index (global sequence)")
+    ax.set_ylabel("Temperature (°C)")
 
+    fig.tight_layout()
     fig.canvas.draw()
 
     panel = np.array(fig.canvas.buffer_rgba())[:, :, :3]
-
     plt.close(fig)
 
     return panel
 
 # ==========================================================
-# CORE PROCESSOR (NO GLOBALS)
+# MAIN PIPELINE
 # ==========================================================
-
 def prepare_temperaturePane(tif_folder, csv_file, output_folder, N=20):
+
+    import numpy as np
+    import pandas as pd
+    import matplotlib.pyplot as plt
+    from pathlib import Path
+    from PIL import Image
 
     output_folder = Path(output_folder)
     output_folder.mkdir(parents=True, exist_ok=True)
-    panelsMade = []
-    # -------------------------
-    # LOAD CSV
-    # -------------------------
+
+    # ==========================================================
+    # LOAD + CLEAN CSV
+    # ==========================================================
+
     df = pd.read_csv(csv_file)
 
     df["RunNum"] = (
@@ -175,82 +149,168 @@ def prepare_temperaturePane(tif_folder, csv_file, output_folder, N=20):
     df = df.sort_values("RunNum").reset_index(drop=True)
 
     run_list = df["RunNum"].tolist()
-    run_to_avgT = dict(zip(df["RunNum"], df["AvgT"]))
-    run_to_start = dict(zip(df["RunNum"], df["StartTime"]))
     run_to_idx = {r: i for i, r in enumerate(run_list)}
-    
-    # ----------------------------------------------------------
-    # GLOBAL TEMPERATURE SCALE
-    # ----------------------------------------------------------
+    run_to_avgT = dict(zip(df["RunNum"], df["AvgT"]))
 
-    global_temp_min = float(df["AvgT"].min())
-    global_temp_max = float(df["AvgT"].max())
+    # ==========================================================
+    # INTERNAL HELPERS
+    # ==========================================================
 
-    pad = 100
+    def parse_run_range(filename):
+        name = filename.replace(".tif", "")
+        parts = name.split("_")
+        try:
+            start_run = int(parts[1])
+            end_run = int(parts[2])
+            return list(range(start_run, end_run + 1))
+        except:
+            return []
 
-    global_temp_min -= pad
-    global_temp_max += pad
-    # -------------------------
-    # OUTPUT RECORDS (LOCAL ONLY)
-    # -------------------------
-    records = []
+    def get_window_indices(run_range):
+        idxs, temps = [], []
+        for r in run_range:
+            if r in run_to_idx and r in run_to_avgT:
+                idxs.append(run_to_idx[r])
+                temps.append(run_to_avgT[r])
+        if not idxs:
+            return None
+        return np.array(idxs, dtype=int), np.array(temps, dtype=float)
+
+    def make_panel(all_runs, full_T, window_idx_set, window_T):
+
+        x = np.arange(len(all_runs))
+        y = full_T
+
+        valid = ~np.isnan(y)
+        x = x[valid]
+        y = y[valid]
+        mask = window_idx_set[valid]
+
+        wx = x[mask]
+        wy = y[mask]
+
+        avg_T = np.mean(window_T) if len(window_T) else np.nan
+
+        fig, ax = plt.subplots(figsize=(5.12, 5.12), dpi=100)
+
+        ax.plot(x, y, color="gray", alpha=0.6, linewidth=1)
+        ax.plot(wx, wy, color="orange", linewidth=2.5)
+
+        if len(wx) > 0:
+            ax.axvspan(wx.min(), wx.max(), color="orange", alpha=0.15)
+
+        ax.text(
+            0.02, 0.95,
+            f"Avg T: {avg_T:.2f} °C",
+            transform=ax.transAxes,
+            bbox=dict(facecolor="white", alpha=0.7),
+            fontsize=10,
+            va="top"
+        )
+
+        ax.set_xlim(0, len(all_runs) - 1)
+        ax.set_ylim(0, 1200)
+
+        ax.set_xlabel("Run index (TIFF subset)")
+        ax.set_ylabel("Temperature (°C)")
+
+        fig.tight_layout()
+        fig.canvas.draw()
+
+        img = np.array(fig.canvas.buffer_rgba())[:, :, :3]
+        plt.close(fig)
+
+        return img
+
+    # ==========================================================
+    # TIFF FILES → DEFINE GLOBAL X SPACE
+    # ==========================================================
 
     tiff_files = sorted(Path(tif_folder).glob("*.tif"))
-    print(len(tiff_files))
-    for idx, tif in enumerate(tiff_files):
+    print(f"[INFO] {len(tiff_files)} TIFF files found")
 
-        run_range = parse_run_range(tif.name)
+    all_runs = []
+    parsed = []
 
-        if len(run_range) == 0:
+    for tif in tiff_files:
+        rrange = parse_run_range(tif.name)
+        valid = [r for r in rrange if r in run_to_idx]
+        if not valid:
             continue
 
-        valid_runs = [r for r in run_range if r in run_to_avgT]
-        if len(valid_runs) == 0:
+        mid = valid[len(valid)//2]
+        all_runs.append(mid)
+        parsed.append((tif, valid, mid))
+
+    all_runs = sorted(set(all_runs))
+    run_to_local = {r:i for i,r in enumerate(all_runs)}
+
+    full_T = np.array([run_to_avgT.get(r, np.nan) for r in all_runs])
+
+    # ==========================================================
+    # BUILD PANELS
+    # ==========================================================
+
+    panels = []
+    records = []
+
+    for i, (tif, run_range, mid_run) in enumerate(parsed):
+
+        out = get_window_indices(run_range)
+        if out is None:
             continue
 
-        r = valid_runs[len(valid_runs) // 2]
+        window_idx, window_T = out
 
-        temp_data = get_temperature_context(
-            run_range,
-            N,
-            run_to_avgT,
-            run_to_start,
-            run_list,
-            run_to_idx
+        window_mask = np.zeros(len(all_runs), dtype=bool)
+
+        for r in run_range:
+            if r in run_to_local:
+                window_mask[run_to_local[r]] = True
+
+        panel = make_panel(
+            all_runs,
+            full_T,
+            window_mask,
+            window_T
         )
 
-        if temp_data is None:
-            print("failed to get temp data")
-            continue
-       #print("here")
-        # -------------------------
-        # BUILD PANEL
-        # -------------------------
-        temp_panel = make_temperature_panel( temp_data,
-        global_temp_min,
-        global_temp_max
-             )
+        out_path = output_folder / f"{tif.stem}.png"
+        Image.fromarray(panel.astype(np.uint8)).save(out_path)
 
-        Image.fromarray(temp_panel.astype(np.uint8)).save(
-            output_folder / f"{tif.stem}.png"
-        )
-        panelsMade.append(output_folder / f"{tif.stem}.png")
+        panels.append(out_path)
 
-        # -------------------------
-        # RECORD
-        # -------------------------
         records.append({
-            "index": idx,
+            "index": i,
             "filename": tif.name,
-            "run": r,
-            "time": run_to_start[r],
-            "temperature": run_to_avgT[r]
+            "run": mid_run,
+            "temperature": run_to_avgT[mid_run]
         })
-    save_summary(records, output_folder)
-    return panelsMade
+
+    # ==========================================================
+    # SUMMARY
+    # ==========================================================
+
+    if records:
+        temps = np.array([r["temperature"] for r in records], dtype=float)
+
+        plt.figure()
+        plt.plot(temps, color="black")
+        plt.ylabel("Temperature (°C)")
+        plt.xlabel("TIFF index")
+        plt.tight_layout()
+        plt.savefig(output_folder / "Temperature_FullRange.png", dpi=200)
+        plt.close()
+
+        pd.DataFrame(records).to_csv(
+            output_folder / "TIFF_Temperature_Log.csv",
+            index=False
+        )
+
+    return panels
 
 # ==========================================================
-# SUMMARY + CSV
+# SUMMARY
 # ==========================================================
 
 def save_summary(records, output_folder):
@@ -259,13 +319,16 @@ def save_summary(records, output_folder):
     output_folder.mkdir(parents=True, exist_ok=True)
 
     if len(records) == 0:
-        print("WARNING: no records to summarize")
+        print("[WARN] No records generated")
         return
 
-    temp = np.array([r["temperature"] for r in records], dtype=float)
+    temps = np.array([r["temperature"] for r in records], dtype=float)
 
     plt.figure()
-    plt.plot(temp, color="black")
+    plt.plot(temps, color="black")
+    plt.ylabel("Temperature (°C)")
+    plt.xlabel("Image index")
+    plt.tight_layout()
     plt.savefig(output_folder / "Temperature_FullRange.png", dpi=200)
     plt.close()
 
@@ -275,12 +338,13 @@ def save_summary(records, output_folder):
     )
 
 # ==========================================================
-# ENTRY POINT
+# WRAPPER (PIPELINE SAFE)
 # ==========================================================
 
 def run_pipeline(tif_folder, csv_file, output_folder, N=10):
-
-    records = process_all(tif_folder, csv_file, output_folder, N=N)
-    save_summary(records, output_folder)
-
-    return records
+    return prepare_temperaturePane(
+        tif_folder,
+        csv_file,
+        output_folder,
+        N=N
+    )

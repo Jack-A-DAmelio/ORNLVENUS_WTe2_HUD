@@ -1,226 +1,246 @@
-import os,re,json,csv,tifffile,numpy as np,matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-from matplotlib.widgets import RectangleSelector
+import json, csv, re
+import numpy as np
+import tifffile
+import matplotlib.pyplot as plt
 from pathlib import Path
-from PIL import Image
+from matplotlib.widgets import RectangleSelector
+from matplotlib.patches import Circle
+
+
+# ==========================================================
+# SETTINGS
+# ==========================================================
+
+REMOVE_SPECIAL = True   # remove exact 0 and 1 pixels if needed
+BINS = 100              # histogram resolution
+
 
 # ==========================================================
 # IO
 # ==========================================================
 
-def load_image(p): return tifffile.imread(p)
+def load_image(p):
+    """Load TIFF image as numpy array."""
+    return tifffile.imread(p)
+
 
 def extract_run_number(f):
-    m=re.search(r"_(\d+_\d+)",f)
-    if m: return m.group(1)
-    raise ValueError("no run number found")
+    """Extract run identifier from filename (optional utility)."""
+    m = re.search(r"_(\d+_\d+)", f)
+    if m:
+        return m.group(1)
+    return f.stem
+
 
 # ==========================================================
-# ROI
+# ROI SELECTION
 # ==========================================================
+
+def normalize_roi(roi):
+    """Ensure ROI is always dict format."""
+    if isinstance(roi, dict):
+        return roi
+    x1, x2, y1, y2 = roi
+    return {"x1": x1, "x2": x2, "y1": y1, "y2": y2}
+
 
 def select_roi(img):
-    roi={}
-    fig,ax=plt.subplots(figsize=(8,8))
-    ax.imshow(img,cmap="gray");ax.set_title("Select ROI then close")
+    """
+    Interactive ROI selection using matplotlib rectangle selector.
+    Returns bounding box dictionary.
+    """
+    roi = {}
 
-    def on_select(e1,e2):
-        x1,y1,x2,y2=int(e1.xdata),int(e1.ydata),int(e2.xdata),int(e2.ydata)
-        roi["x1"],roi["x2"]=min(x1,x2),max(x1,x2)
-        roi["y1"],roi["y2"]=min(y1,y2),max(y1,y2)
-        print("ROI:",roi)
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.imshow(img, cmap="gray")
+    ax.set_title("Select ROI then close window")
 
-    RectangleSelector(ax,on_select,useblit=True,button=[1],interactive=True)
+    def on_select(e1, e2):
+        x1, y1 = int(e1.xdata), int(e1.ydata)
+        x2, y2 = int(e2.xdata), int(e2.ydata)
+
+        roi["x1"], roi["x2"] = min(x1, x2), max(x1, x2)
+        roi["y1"], roi["y2"] = min(y1, y2), max(y1, y2)
+
+    RectangleSelector(ax, on_select, useblit=True, button=[1], interactive=True)
     plt.show()
 
-    if not roi: raise RuntimeError("No ROI selected")
+    if not roi:
+        raise RuntimeError("No ROI selected")
+
     return roi
 
-def save_roi(roi,out):
-    p=Path(out)/"ROI_coordinates.json"
-    json.dump(roi,open(p,"w"),indent=2)
-    print("saved:",p)
 
 # ==========================================================
-# IMAGE OPS
+# IMAGE PROCESSING
 # ==========================================================
 
-def crop_image(img,roi):
-    return img[roi["y1"]:roi["y2"],roi["x1"]:roi["x2"]]
+def crop_image(img, roi):
+    """Crop image to ROI."""
+    roi = normalize_roi(roi)
+    return img[roi["y1"]:roi["y2"], roi["x1"]:roi["x2"]]
 
-def calculate_histogram(img,bins=500):
-    px=img.ravel()
-    px=px[(px!=0.0)&(px!=1.0)]
-    h,e=np.histogram(px,bins=bins,range=(px.min(),px.max()))
-    g=(e[:-1]+e[1:])/2
-    return g,h
+
+def normalize_image(img):
+    """
+    Normalize image intensities to [0, 1] using min-max scaling.
+    This ensures all histograms are comparable in range.
+    """
+    img = img.astype(np.float32)
+
+    mn = np.nanmin(img)
+    mx = np.nanmax(img)
+
+    # avoid divide-by-zero if flat image
+    if mx - mn == 0:
+        return np.zeros_like(img, dtype=np.float32)
+
+    return (img - mn) / (mx - mn)
+
+
+def build_histogram(img, bins):
+    """
+    Build histogram of pixel intensities in [0, 1].
+    """
+    px = img.ravel()
+    px = px[np.isfinite(px)]
+
+    # optionally remove extreme artifacts
+    if REMOVE_SPECIAL:
+        px = px[(px != 0.0) & (px != 1.0)]
+
+    h, edges = np.histogram(px, bins=bins, range=(0.0, 1.0))
+    centers = (edges[:-1] + edges[1:]) / 2
+
+    return centers, h
+
 
 # ==========================================================
-# MODELS
+# CSV OUTPUT
 # ==========================================================
 
-def gaussian(x,a,m,s):
-    return a*np.exp(-(x-m)**2/(2*s**2))
+def init_csv(out):
+    """Create output CSV if it doesn't exist."""
+    out = Path(out)
+    out.mkdir(parents=True, exist_ok=True)
 
-def double_gaussian(x,a1,m1,s1,a2,m2,s2):
-    return gaussian(x,a1,m1,s1)+gaussian(x,a2,m2,s2)
+    csv_path = out / "parameters.csv"
 
-def fit_gaussians(g,h):
-    mu=np.average(g,weights=h)
-    sg=np.sqrt(np.average((g-mu)**2,weights=h))
-    amp=h.max()
+    if not csv_path.exists():
+        with open(csv_path, "w", newline="") as f:
+            csv.writer(f).writerow(["tiff", "run", "roi"])
 
-    p1,_=curve_fit(gaussian,g,h,p0=[amp,mu,sg])
+    return csv_path
 
-    mid=len(g)//2
-    p2,_=curve_fit(
-        double_gaussian,g,h,
-        p0=[amp/2,g[mid//2],sg/2,amp/2,g[mid+mid//2],sg/2],
-        maxfev=10000
-    )
 
-    r1=np.sum((h-gaussian(g,*p1))**2)
-    r2=np.sum((h-double_gaussian(g,*p2))**2)
+def append_csv(csv_path, tiff, run, roi):
+    """Append one processed entry."""
+    row = [str(tiff), run, json.dumps(roi)]
 
-    return p1,p2,r1,r2
+    with open(csv_path, "a", newline="") as f:
+        csv.writer(f).writerow(row)
+
 
 # ==========================================================
 # PLOTTING
 # ==========================================================
 
-def plot_gaussian_comparison(g,h,p1,p2,r1,r2,out,run,save=True,show=False):
-    plt.figure(figsize=(8,6))
-    plt.plot(g,h,label="hist")
-    plt.plot(g,gaussian(g,*p1),label=f"1G RSS={r1:.2e}")
-    plt.plot(g,double_gaussian(g,*p2),label=f"2G RSS={r2:.2e}")
-    plt.xlabel("grey");plt.ylabel("count");plt.title(run)
-    plt.legend();plt.tight_layout()
+def plot_histogram(x, h, out, run, show=False):
+    """
+    Plot normalized histogram.
+    """
 
-    if save:
-        p=Path(out)/f"GaussianFitComparison_{run}.png"
-        plt.savefig(p,dpi=300,bbox_inches="tight")
-        print("saved:",p)
+    fig, ax = plt.subplots(figsize=(8, 6))
+
+    # main histogram
+    ax.plot(x, h, color="black", label="Histogram")
+
+    # reference guides
+    ax.set_xlim(0, 1)
+    for v in [0.25, 0.5, 0.75]:
+        ax.axvline(v, color="gray", linestyle="--", linewidth=1)
+
+    # styling
+    ax.set_xlabel("Normalized intensity (0 → 1)")
+    ax.set_ylabel("Pixel count")
+    ax.set_title(run)
+
+    ax.legend()
+
+    # small visual markers (kept from your original style)
+    ax.add_patch(Circle((0.05, 0.05), 0.03,
+                        transform=ax.transAxes,
+                        facecolor="black"))
+
+    ax.add_patch(Circle((0.95, 0.05), 0.03,
+                        transform=ax.transAxes,
+                        facecolor="white",
+                        edgecolor="black",
+                        linewidth=1))
+
+    plt.tight_layout()
+
+    outpath = Path(out) / f"Hist_{run}.png"
+    plt.savefig(outpath, dpi=300, bbox_inches="tight")
 
     if show:
         plt.show()
     else:
         plt.close()
 
-# ==========================================================
-# CSV SYSTEM (FIXED: CSV WRITER USED PROPERLY)
-# ==========================================================
-
-def init_dataset_csv(folder):
-    csv_path=Path(folder)/"parameters.csv"
-    csv_path.parent.mkdir(parents=True,exist_ok=True)
-
-    if not csv_path.exists():
-        with open(csv_path,"w",newline="") as f:
-            csv.writer(f).writerow([
-                "tiff","run","roi",
-                "g1_amp","g1_mean","g1_sigma","rss_1g",
-                "g2_amp1","g2_mean1","g2_sigma1",
-                "g2_amp2","g2_mean2","g2_sigma2","rss_2g",
-                "delta_rss","better_model","error"
-            ])
-
-    return csv_path
-
-def append_dataset_row(csv_path,tiff,run,roi,p1,p2,r1,r2,error=None):
-
-    g1_amp,g1_mean,g1_sigma=p1
-    g2_amp1,g2_mean1,g2_sigma1,g2_amp2,g2_mean2,g2_sigma2=p2
-
-    delta_rss=r1-r2
-    better_model="1G" if r1<r2 else "2G"
-
-    row=[
-        str(tiff),
-        run,
-        json.dumps(roi,separators=(",",":")),
-        g1_amp,g1_mean,g1_sigma,r1,
-        g2_amp1,g2_mean1,g2_sigma1,
-        g2_amp2,g2_mean2,g2_sigma2,
-        r2,
-        delta_rss,
-        better_model,
-        error if error else ""
-    ]
-
-    with open(csv_path,"a",newline="") as f:
-        csv.writer(f).writerow(row)
 
 # ==========================================================
-# SINGLE IMAGE PIPELINE
+# MAIN PIPELINE
 # ==========================================================
 
-def process_image(path,out,bins,show=False):
-    img=load_image(path)
-    run=extract_run_number(Path(path).name)
+def create_roi_panes(folder, dest, roi, bins=100, show=False, remove_special_pixels=True):
+    """
+    Full processing pipeline:
+    - load TIFFs
+    - crop ROI
+    - normalize (0–1)
+    - compute histogram
+    - plot + save
+    - log CSV
+    """
 
-    roi=select_roi(img)
-    save_roi(roi,out)
+    global REMOVE_SPECIAL
+    REMOVE_SPECIAL = remove_special_pixels
 
-    crop=crop_image(img,roi)
-    g,h=calculate_histogram(crop,bins)
+    folder = Path(folder)
+    dest = Path(dest)
+    dest.mkdir(parents=True, exist_ok=True)
 
-    error=None
-    try:
-        p1,p2,r1,r2=fit_gaussians(g,h)
-    except Exception as e:
-        p1=[np.nan]*3
-        p2=[np.nan]*6
-        r1=r2=np.nan
-        error=str(e)
-
-    plot_gaussian_comparison(g,h,p1,p2,r1,r2,out,run,show=show)
-
-    csv_path=init_dataset_csv(out)
-    append_dataset_row(csv_path,path,run,roi,p1,p2,r1,r2,error)
-
-    return {"run":run,"roi":roi,"p1":p1,"p2":p2,"r1":r1,"r2":r2,"error":error}
-
-# ==========================================================
-# BATCH PIPELINE
-# ==========================================================
-
-def create_roi_panes(folder,dest,roi,bins=100,show=False):
-    folder,dest=Path(folder),Path(dest)
-    dest.mkdir(parents=True,exist_ok=True)
-
-    csv_path=init_dataset_csv(dest)
-
-    files=sorted(folder.glob("*.tif"))
+    files = sorted(folder.glob("*.tif"))
     if not files:
-        raise ValueError("no tif files found")
+        raise ValueError("No TIFF files found")
 
-    print(f"[INFO] {len(files)} files")
-    pane=[]
+    csv_path = init_csv(dest)
+    outputs = []
 
-    for i,f in enumerate(files):
-        print(f"[PROCESS] {i+1}/{len(files)} {f.name}")
+    for i, f in enumerate(files):
 
-        img=np.array(Image.open(f))
-        x1,x2,y1,y2=roi
-        crop=img[y1:y2,x1:x2]
+        # ---- load image
+        img = load_image(f)
 
-        g,h=calculate_histogram(crop,bins)
+        # ---- crop ROI
+        crop = crop_image(img, roi)
 
-        error=None
-        try:
-            p1,p2,r1,r2=fit_gaussians(g,h)
-        except Exception as e:
-            p1=[np.nan]*3
-            p2=[np.nan]*6
-            r1=r2=np.nan
-            error=str(e)
+        # ---- normalize to 0–1 (IMPORTANT STEP)
+        crop = normalize_image(crop)
 
-        run=f.stem
+        # ---- histogram
+        x, h = build_histogram(crop, bins)
 
-        plot_gaussian_comparison(g,h,p1,p2,r1,r2,dest,run,save=True,show=show)
+        # ---- run label
+        run = f.stem
 
-        append_dataset_row(csv_path,f,run,roi,p1,p2,r1,r2,error)
+        # ---- plot result
+        plot_histogram(x, h, dest, run, show=show)
 
-        pane.append(Path(dest)/f"GaussianFitComparison_{run}.png")
+        # ---- save metadata
+        append_csv(csv_path, f, run, roi)
 
-    return pane
+        outputs.append(dest / f"Hist_{run}.png")
+
+    return outputs
